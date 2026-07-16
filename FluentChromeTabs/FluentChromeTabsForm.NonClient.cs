@@ -11,6 +11,17 @@ namespace FluentChromeTabs
         private int _hotCaptionButton;
         private int _pressedCaptionButton;
 
+        // WinForms' own Form.RestoreWindowBoundsIfNecessary() grows the window by the
+        // reclaimed-caption height on every restore-from-minimize: its cached restore
+        // rectangle disagrees with this custom caption-reclaiming frame, so each restore
+        // adds ~one caption height and the error compounds over repeated cycles.
+        //
+        // We snapshot the true Normal bounds at minimize time, then after the restore
+        // settles (posted via BeginInvoke, since the bogus correction arrives on a later
+        // WM_SIZE, not synchronously during SC_RESTORE) reassert them if WinForms drifted.
+        private Rectangle? _boundsBeforeMinimize;
+        private bool _restoreFixPending;
+
         private static int ResizeBorderHeight()
         {
             return NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSIZEFRAME) + NativeMethods.GetSystemMetrics(NativeMethods.SM_CXPADDEDBORDER);
@@ -18,6 +29,41 @@ namespace FluentChromeTabs
 
         protected override void WndProc(ref Message m)
         {
+            // Snapshot the real Normal bounds as the window leaves Normal for Minimized,
+            // and arm the post-restore correction when it comes back.
+            if (m.Msg == NativeMethods.WM_SIZE)
+            {
+                int sizeType = m.WParam.ToInt32();
+                if (sizeType == NativeMethods.SIZE_MINIMIZED)
+                {
+                    _boundsBeforeMinimize = RestoreBounds;
+                }
+                else if (sizeType == NativeMethods.SIZE_MAXIMIZED)
+                {
+                    // Restored straight to maximized (e.g. taskbar-restoring a window that
+                    // was maximized before minimizing) — the Normal-bounds correction below
+                    // doesn't apply; drop the snapshot so it can't fire on a later restore.
+                    _boundsBeforeMinimize = null;
+                }
+                else if (sizeType == NativeMethods.SIZE_RESTORED && _boundsBeforeMinimize.HasValue && !_restoreFixPending)
+                {
+                    _restoreFixPending = true;
+                    Rectangle expected = _boundsBeforeMinimize.Value;
+                    _boundsBeforeMinimize = null;
+
+                    // Run after all restore-related messages (including the stray WM_SIZE
+                    // where WinForms grows RestoreBounds) have been processed.
+                    BeginInvoke(new Action(() =>
+                    {
+                        _restoreFixPending = false;
+                        if (WindowState == FormWindowState.Normal && Bounds != expected)
+                        {
+                            Bounds = expected;
+                        }
+                    }));
+                }
+            }
+
             switch (m.Msg)
             {
                 case NativeMethods.WM_NCCALCSIZE:

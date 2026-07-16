@@ -14,6 +14,11 @@ namespace FluentChromeTabs
         internal const int WM_NCRBUTTONUP = 0x00A5;
         internal const int WM_NCMOUSELEAVE = 0x02A2;
         internal const int WM_SYSCOMMAND = 0x0112;
+        internal const int WM_SIZE = 0x0005;
+
+        internal const int SIZE_RESTORED = 0;
+        internal const int SIZE_MINIMIZED = 1;
+        internal const int SIZE_MAXIMIZED = 2;
 
         internal const int HTCLIENT = 1;
         internal const int HTCAPTION = 2;
@@ -54,6 +59,7 @@ namespace FluentChromeTabs
             public RECT rgrc0, rgrc1, rgrc2;
             public IntPtr lppos;
         }
+
 
         [StructLayout(LayoutKind.Sequential)]
         internal struct MARGINS
