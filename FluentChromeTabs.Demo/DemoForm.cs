@@ -125,10 +125,12 @@ namespace FluentChromeTabs.Demo
 
             Button rtlToggle = new Button
             {
-                Text = "עברית / RTL",
+                Text = RightToLeft == RightToLeft.Yes ? "Layout: RTL (click for LTR)" : "Layout: LTR (click for RTL)",
                 Font = new Font("Segoe UI", 10f),
-                Size = new Size(140, 36),
-                Location = new Point(644, 380),
+                Size = new Size(220, 36),
+                // Top of the tab, so it stays visible even when the window is short/narrow.
+                Location = new Point(40, 8),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
                 FlatStyle = FlatStyle.Flat
             };
             rtlToggle.Click += (sender, e) =>
@@ -136,6 +138,7 @@ namespace FluentChromeTabs.Demo
                 bool enable = RightToLeft != RightToLeft.Yes;
                 RightToLeft = enable ? RightToLeft.Yes : RightToLeft.No;
                 RightToLeftLayout = enable;
+                rtlToggle.Text = enable ? "Layout: RTL (click for LTR)" : "Layout: LTR (click for RTL)";
             };
 
             panel.Controls.Add(title);
