@@ -606,13 +606,13 @@ namespace FluentChromeTabs
         private int _tabListOpenGroup = -1;
 
         /// <summary>True while the tab-list popup is on screen (drives the toggle's open state).</summary>
-        internal bool IsTabListOpen
+        public bool IsTabListOpen
         {
             get { return _tabListDropDown != null && !_tabListDropDown.IsDisposed && _tabListDropDown.Visible; }
         }
 
         /// <summary>The split region whose tab-list popup is open, or -1 when none is.</summary>
-        internal int TabListOpenGroup
+        public int TabListOpenGroup
         {
             get { return IsTabListOpen ? _tabListOpenGroup : -1; }
         }
@@ -623,7 +623,7 @@ namespace FluentChromeTabs
         /// the popup is open (or immediately after the opening click dismissed it via
         /// deactivation) closes instead of reopening.
         /// </summary>
-        private void ShowTabListMenu(int group)
+        public void ShowTabListMenu(int group)
         {
             if (IsTabListOpen)
             {
