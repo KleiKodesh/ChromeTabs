@@ -1000,7 +1000,11 @@ namespace FluentChromeTabs
             int available = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
             int width = (available - (count - 1) * TabGapPx) / count;
 
-            return Math.Max(Dpi(48), Math.Min(Dpi(220), width));
+            // Shrink tabs to share the available width evenly, down to a small floor. The
+            // floor is low enough that even many tabs stay within the region (which stops
+            // before the caption buttons), so tabs never render under min/max/close; the
+            // tab-list dropdown handles picking among tabs once they get this tight.
+            return Math.Max(Dpi(28), Math.Min(Dpi(220), width));
         }
 
         private Rectangle TabRect(int index)
@@ -1061,6 +1065,19 @@ namespace FluentChromeTabs
         {
             int slotFromRight = htCode == NativeMethods.HTCLOSE ? 1 : htCode == NativeMethods.HTMAXBUTTON ? 2 : 3;
             return new Rectangle(ClientSize.Width - slotFromRight * CaptionButtonWidthPx, 0, CaptionButtonWidthPx, CaptionButtonHeightPx);
+        }
+
+        /// <summary>Left edge of the min/max/close cluster — the right bound for all strip content.</summary>
+        private int CaptionButtonsLeftPx
+        {
+            get { return ClientSize.Width - 3 * CaptionButtonWidthPx; }
+        }
+
+        /// <summary>Right bound for painted tab text — kept clear of the caption buttons, since
+        /// TextRenderer.DrawText ignores the Graphics clip region.</summary>
+        private int StripContentRightPx
+        {
+            get { return CaptionButtonsLeftPx - Dpi(2); }
         }
 
         private int HitTab(Point p)

@@ -98,6 +98,13 @@ namespace FluentChromeTabs
                 g.FillRectangle(content, 0, StripHeightPx, ClientSize.Width, Math.Max(0, ClientSize.Height - StripHeightPx));
             }
 
+            // Keep all strip content (icon, tabs, +/list buttons, divider) left of the caption
+            // buttons so nothing renders under min/max/close when the window is too narrow.
+            // GDI-clip the background/glyph drawing here; TextRenderer.DrawText ignores this
+            // clip, so tab titles are clamped separately in DrawTab (see StripContentRightPx).
+            GraphicsState stripClip = g.Save();
+            g.SetClip(new Rectangle(0, 0, Math.Max(0, CaptionButtonsLeftPx - Dpi(2)), StripHeightPx));
+
             if (HasWindowIcon)
             {
                 Bitmap iconBitmap = GetWindowIconBitmap(WindowIconSizePx);
@@ -161,6 +168,9 @@ namespace FluentChromeTabs
                 g.SmoothingMode = saved;
             }
 
+            // Lift the clip so the caption buttons paint in full.
+            g.Restore(stripClip);
+
             DrawCaptionButton(g, NativeMethods.HTMINBUTTON);
             DrawCaptionButton(g, NativeMethods.HTMAXBUTTON);
             DrawCaptionButton(g, NativeMethods.HTCLOSE);
@@ -212,6 +222,10 @@ namespace FluentChromeTabs
 
             bool showClose = TabShowsClose(index);
             int textRight = showClose ? TabCloseRect(rect).Left - Dpi(4) : rect.Right - Dpi(8);
+
+            // TextRenderer.DrawText ignores the strip clip set in OnPaint, so keep the text box
+            // itself clear of the caption buttons (matters on tabs that overrun a narrow strip).
+            textRight = Math.Min(textRight, StripContentRightPx);
 
             // No EndEllipsis: on narrow tabs the "…" just eats space the text could use —
             // hard-clip instead (the tooltip still surfaces the full title).
