@@ -471,11 +471,13 @@ namespace FluentChromeTabs
         {
             // Tabs are custom-drawn regions, not child controls, so there is no control to
             // hand to ToolTip.SetToolTip for automatic positioning — we place it ourselves.
-            // Always show the full title on hover (not only when the tab text is truncated).
+            // Always show on hover (not only when the tab text is truncated), preferring the
+            // long ListTitle (e.g. a full breadcrumb path) over the short strip caption.
             if (_hoverTab >= 0 && !_dragging)
             {
                 FluentTab tab = _tabs[_hoverTab];
-                ShowStripToolTip(tab, tab.Title, TabRect(_hoverTab));
+                string tip = string.IsNullOrEmpty(tab.ListTitle) ? tab.Title : tab.ListTitle;
+                ShowStripToolTip(tab, tip, TabRect(_hoverTab));
             }
             else
             {

@@ -54,6 +54,14 @@ namespace FluentChromeTabs
             }
         }
 
+        /// <summary>
+        /// Optional longer text for this tab's row in the tab-list dropdown (e.g. a full
+        /// breadcrumb path). The strip caption always uses <see cref="Title" />; the dropdown
+        /// falls back to <see cref="Title" /> when this is null or empty. No repaint on set —
+        /// the value is only read when the dropdown opens.
+        /// </summary>
+        public string ListTitle { get; set; }
+
         /// <summary>Optional 16x16 icon drawn at the left edge of the tab.</summary>
         public Image Icon
         {

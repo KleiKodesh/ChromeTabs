@@ -315,7 +315,9 @@ namespace FluentChromeTabs
                 }
             }
 
-            width = Math.Min(width, S(340));
+            // Wide enough for breadcrumb-style list titles (title · path segments);
+            // anything longer truncates with the ellipsis + hover tooltip.
+            width = Math.Min(width, S(500));
             int height = Math.Min(ContentHeight, Screen.FromControl(_ownerForm).WorkingArea.Height * 3 / 4);
 
             return new Size(width, height);

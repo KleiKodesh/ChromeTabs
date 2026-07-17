@@ -649,8 +649,10 @@ namespace FluentChromeTabs
                 }
 
                 FluentTab captured = tab;
+                string listText = !string.IsNullOrEmpty(tab.ListTitle) ? tab.ListTitle
+                    : string.IsNullOrEmpty(tab.Title) ? "…" : tab.Title;
                 open.Items.Add(new TabListItem(
-                    string.IsNullOrEmpty(tab.Title) ? "…" : tab.Title,
+                    listText,
                     tab == SelectedTab || tab.Highlighted,
                     () => SelectedTab = captured));
             }
