@@ -56,11 +56,37 @@ namespace FluentChromeTabs
 
         /// <summary>
         /// Optional longer text for this tab's row in the tab-list dropdown (e.g. a full
-        /// breadcrumb path). The strip caption always uses <see cref="Title" />; the dropdown
-        /// falls back to <see cref="Title" /> when this is null or empty. No repaint on set —
-        /// the value is only read when the dropdown opens.
+        /// breadcrumb path). The strip caption always uses <see cref="Title" /> or
+        /// <see cref="WideTitle" />; the dropdown falls back to <see cref="Title" /> when this
+        /// is null or empty. No repaint on set — the value is only read when the dropdown opens.
         /// </summary>
         public string ListTitle { get; set; }
+
+        private string _wideTitle;
+
+        /// <summary>
+        /// Optional longer caption (e.g. "type: title") drawn on the strip tab INSTEAD of
+        /// <see cref="Title" /> — but only when the tab is wide enough to fit it whole;
+        /// narrow tabs fall back to the clean <see cref="Title" />. Null or empty means
+        /// always draw <see cref="Title" />.
+        /// </summary>
+        public string WideTitle
+        {
+            get { return _wideTitle; }
+            set
+            {
+                if (_wideTitle == value)
+                {
+                    return;
+                }
+
+                _wideTitle = value;
+                if (Owner != null)
+                {
+                    Owner.InvalidateStrip();
+                }
+            }
+        }
 
         /// <summary>Optional 16x16 icon drawn at the left edge of the tab.</summary>
         public Image Icon
