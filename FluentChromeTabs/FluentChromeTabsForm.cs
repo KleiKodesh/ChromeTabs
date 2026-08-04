@@ -542,6 +542,10 @@ namespace FluentChromeTabs
 
             _selectedIndex = index;
 
+            // Selecting a tab that is scrolled out of sight must bring it back, or the
+            // strip would show no active tab at all.
+            EnsureTabVisible(index);
+
             if (index >= 0 && index < _tabs.Count)
             {
                 FluentTab tab = _tabs[index];
@@ -848,6 +852,25 @@ namespace FluentChromeTabs
             get { return Dpi(6); }
         }
 
+        /// <summary>
+        /// Narrowest a tab may shrink to. Sized so the favicon still fits whole:
+        /// Dpi(10) left padding + Dpi(16) icon + Dpi(10) trailing room.
+        /// </summary>
+        private int MinTabWidthPx
+        {
+            get { return Dpi(36); }
+        }
+
+        /// <summary>
+        /// Narrowest a tab may be and still draw its close button alongside the favicon:
+        /// Dpi(10) padding + Dpi(16) icon + Dpi(6) gap + Dpi(16) close + Dpi(8) trailing.
+        /// Below this the two would overlap, so the close is dropped.
+        /// </summary>
+        private int MinTabWidthWithClosePx
+        {
+            get { return Dpi(56); }
+        }
+
         private int CaptionButtonWidthPx
         {
             get { return Dpi(46); }
@@ -937,6 +960,33 @@ namespace FluentChromeTabs
             return RegionRightPx(group) - (ShowNewTabButton ? NewTabButtonSizePx + Dpi(8) : 0);
         }
 
+        /// <summary>
+        /// The band the tabs are actually painted and clipped to. It insets by a chevron
+        /// on each side while the group overflows, so scrolled tabs slide underneath the
+        /// buttons instead of colliding with them.
+        ///
+        /// This is deliberately NOT folded into GroupTabsLeft/RightPx: those define how
+        /// much room the tabs have to share, and insetting them would change the computed
+        /// tab width, which feeds back into whether the group overflows at all.
+        /// </summary>
+        private int ScrollChevronInsetPx
+        {
+            get { return Dpi(16) + Dpi(4); }
+        }
+
+        private Rectangle GroupTabsClipRect(int group)
+        {
+            int left = GroupTabsLeftPx(group);
+            int right = GroupTabsRightPx(group);
+            if (GroupOverflows(group))
+            {
+                left += ScrollChevronInsetPx;
+                right -= ScrollChevronInsetPx;
+            }
+            int tabTop = StripHeightPx - TabHeightPx - TabBottomMarginPx;
+            return new Rectangle(left, tabTop, Math.Max(0, right - left), TabHeightPx);
+        }
+
         private int GroupTabCount(int group)
         {
             int count = 0;
@@ -1002,11 +1052,114 @@ namespace FluentChromeTabs
             int available = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
             int width = (available - (count - 1) * TabGapPx) / count;
 
-            // Shrink tabs to share the available width evenly, down to a small floor. The
-            // floor is low enough that even many tabs stay within the region (which stops
-            // before the caption buttons), so tabs never render under min/max/close; the
-            // tab-list dropdown handles picking among tabs once they get this tight.
-            return Math.Max(Dpi(28), Math.Min(Dpi(220), width));
+            // Shrink tabs to share the available width evenly, down to a floor that keeps
+            // the favicon whole: it is drawn Dpi(10) from the left edge at Dpi(16) square,
+            // so a narrower tab clips the icon against the rounded right edge and leaves
+            // an unreadable sliver. Dpi(36) = 10 + 16 + 10 of trailing room.
+            //
+            // Past the floor the tabs stop shrinking and the strip SCROLLS instead (see
+            // ScrollOffsetPx and the edge chevrons) — squeezing further would just make
+            // every tab equally unidentifiable.
+            return Math.Max(MinTabWidthPx, Math.Min(Dpi(220), width));
+        }
+
+        // ── Overflow scrolling ────────────────────────────────────────────────────
+        // Once tabs hit MinTabWidthPx they stop shrinking, so a group's tabs can be
+        // wider than its region. Rather than let them run under the caption buttons,
+        // the group scrolls: one horizontal offset shifts TabRect, and because every
+        // consumer (hit-testing, dragging, tooltips, painting) goes through TabRect,
+        // they all follow without knowing scrolling exists.
+
+        private readonly Dictionary<int, int> _scrollOffsetByGroup = new Dictionary<int, int>();
+
+        /// <summary>Total width the group's tabs want, ignoring the region's limit.</summary>
+        private int GroupContentWidthPx(int group)
+        {
+            int count = GroupTabCount(group);
+            if (count == 0)
+            {
+                return 0;
+            }
+            return count * (TabWidthPx(group) + TabGapPx) - TabGapPx;
+        }
+
+        /// <summary>How far the group can scroll before its last tab is flush right; 0 when it fits.</summary>
+        private int MaxScrollOffsetPx(int group)
+        {
+            // Measured against the band the tabs actually occupy once the chevrons have
+            // taken their inset — using the full region would stop short of the last tab.
+            int full = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
+            int content = GroupContentWidthPx(group);
+            if (content <= full)
+            {
+                return 0;
+            }
+            int banded = Math.Max(0, full - 2 * ScrollChevronInsetPx);
+            return Math.Max(0, content - banded);
+        }
+
+        /// <summary>True when the group has more tabs than fit, so the chevrons are shown.</summary>
+        private bool GroupOverflows(int group)
+        {
+            return MaxScrollOffsetPx(group) > 0;
+        }
+
+        private int ScrollOffsetPx(int group)
+        {
+            int offset;
+            if (!_scrollOffsetByGroup.TryGetValue(group, out offset))
+            {
+                return 0;
+            }
+            // Clamp on read: the max shifts as tabs open, close, or the window resizes,
+            // and a stale offset would leave a gap at the right edge.
+            return Math.Max(0, Math.Min(offset, MaxScrollOffsetPx(group)));
+        }
+
+        private void SetScrollOffsetPx(int group, int value)
+        {
+            int clamped = Math.Max(0, Math.Min(value, MaxScrollOffsetPx(group)));
+            if (ScrollOffsetPx(group) == clamped)
+            {
+                return;
+            }
+            _scrollOffsetByGroup[group] = clamped;
+            InvalidateStrip();
+        }
+
+        /// <summary>Scrolls a group by one tab's worth, used by the edge chevrons.</summary>
+        private void ScrollGroupByTab(int group, int direction)
+        {
+            SetScrollOffsetPx(group, ScrollOffsetPx(group) + direction * (TabWidthPx(group) + TabGapPx));
+        }
+
+        /// <summary>Brings a tab fully into view — called when the selection changes.</summary>
+        private void EnsureTabVisible(int index)
+        {
+            if (index < 0 || index >= _tabs.Count)
+            {
+                return;
+            }
+
+            int group = GroupOf(_tabs[index]);
+            if (!GroupOverflows(group))
+            {
+                return;
+            }
+
+            int width = TabWidthPx(group);
+            int tabLeft = GroupPosition(index) * (width + TabGapPx);
+            int offset = ScrollOffsetPx(group);
+            int visible = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
+
+            if (tabLeft < offset)
+            {
+                SetScrollOffsetPx(group, tabLeft);
+            }
+            else if (tabLeft + width > offset + visible)
+            {
+                SetScrollOffsetPx(group, tabLeft + width - visible);
+            }
         }
 
         private Rectangle TabRect(int index)
@@ -1014,11 +1167,25 @@ namespace FluentChromeTabs
             int group = GroupOf(_tabs[index]);
             int width = TabWidthPx(group);
 
+            // Tabs start at the clip band's left edge, which is inset by a chevron while
+            // the group overflows — otherwise the first tab would sit underneath the
+            // leading chevron and the last would run past the trailing one.
             return new Rectangle(
-                GroupTabsLeftPx(group) + GroupPosition(index) * (width + TabGapPx),
+                GroupTabsClipRect(group).Left + GroupPosition(index) * (width + TabGapPx) - ScrollOffsetPx(group),
                 StripHeightPx - TabHeightPx - TabBottomMarginPx,
                 width,
                 TabHeightPx);
+        }
+
+        /// <summary>The left/right chevron buttons, drawn at the region edges while it overflows.</summary>
+        private Rectangle ScrollChevronRect(int group, bool leading)
+        {
+            int size = Dpi(16);
+            int tabTop = StripHeightPx - TabHeightPx - TabBottomMarginPx;
+            int y = tabTop + (TabHeightPx - size) / 2;
+            return leading
+                ? new Rectangle(GroupTabsLeftPx(group), y, size, size)
+                : new Rectangle(GroupTabsRightPx(group) - size, y, size, size);
         }
 
         private Rectangle TabCloseRect(Rectangle tabRect)
@@ -1029,8 +1196,24 @@ namespace FluentChromeTabs
 
         private bool TabShowsClose(int index)
         {
-            return _tabs[index].CanClose
-                && (index == _selectedIndex || _tabs[index].Highlighted || TabWidthPx(GroupOf(_tabs[index])) >= Dpi(72));
+            if (!_tabs[index].CanClose)
+            {
+                return false;
+            }
+
+            int width = TabWidthPx(GroupOf(_tabs[index]));
+
+            // The close button is anchored to the right edge and the favicon to the
+            // left, so on a narrow tab they collide — the × ends up drawn on top of
+            // the icon. The icon wins: it identifies the tab, while the close is also
+            // available from the context menu and Ctrl+W. Below the threshold the
+            // active tab simply shows no ×.
+            if (_tabs[index].Icon != null && width < MinTabWidthWithClosePx)
+            {
+                return false;
+            }
+
+            return index == _selectedIndex || _tabs[index].Highlighted || width >= Dpi(72);
         }
 
         private Rectangle NewTabButtonRect(int group)
@@ -1091,7 +1274,9 @@ namespace FluentChromeTabs
 
             for (int i = 0; i < _tabs.Count; i++)
             {
-                if (TabRect(i).Contains(p))
+                // Match what is painted: a scrolled tab is clipped to its group's band,
+                // so the part hidden under a chevron must not be clickable either.
+                if (TabRect(i).Contains(p) && GroupTabsClipRect(GroupOf(_tabs[i])).Contains(p))
                 {
                     return i;
                 }

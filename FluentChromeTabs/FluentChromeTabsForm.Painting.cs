@@ -12,6 +12,8 @@ namespace FluentChromeTabs
         private bool _hoverTabClose;
         private int _hoverNewTabGroup = -1;
         private int _hoverTabListGroup = -1;
+        // Hovered scroll chevron encoded as group*2 (+1 for the trailing one); -1 = none.
+        private int _hoverScrollChevron = -1;
         private bool _hoverDivider;
         // Identity of whatever the tooltip currently describes (a FluentTab, or a boxed
         // caption hit-code) so repeated same-target mouse moves don't re-show/flicker, while
@@ -43,17 +45,33 @@ namespace FluentChromeTabs
         /// </summary>
         private void DrawUnmirroredImage(Graphics g, Image image, Rectangle rect)
         {
-            if (IsMirrored)
+            // GDI+ defaults to Bilinear with a half-pixel origin offset, which makes an
+            // icon look soft and slightly misaligned whenever its bitmap size does not
+            // exactly match the destination — the normal case once DPI scaling is in play.
+            InterpolationMode savedInterpolation = g.InterpolationMode;
+            PixelOffsetMode savedPixelOffset = g.PixelOffsetMode;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+            try
             {
-                GraphicsState state = g.Save();
-                g.TranslateTransform(rect.Left * 2 + rect.Width, 0);
-                g.ScaleTransform(-1f, 1f);
-                g.DrawImage(image, rect);
-                g.Restore(state);
+                if (IsMirrored)
+                {
+                    GraphicsState state = g.Save();
+                    g.TranslateTransform(rect.Left * 2 + rect.Width, 0);
+                    g.ScaleTransform(-1f, 1f);
+                    g.DrawImage(image, rect);
+                    g.Restore(state);
+                }
+                else
+                {
+                    g.DrawImage(image, rect);
+                }
             }
-            else
+            finally
             {
-                g.DrawImage(image, rect);
+                g.InterpolationMode = savedInterpolation;
+                g.PixelOffsetMode = savedPixelOffset;
             }
         }
 
@@ -115,24 +133,47 @@ namespace FluentChromeTabs
                 }
             }
 
-            for (int i = 0; i < _tabs.Count; i++)
+            // Tabs are clipped per group so a scrolled-out tab disappears cleanly under
+            // the chevrons instead of overrunning them and the caption buttons.
+            for (int group = 0; group < GroupCount; group++)
             {
-                if (!_dragging || i != _dragIndex)
-                {
-                    DrawTab(g, i, TabRect(i));
-                }
-            }
+                // Save/Restore rather than swapping g.Clip: a strip-wide clip is already in
+                // effect (see stripClip above), and assigning a Region replaces it outright
+                // instead of nesting — which drops that clip and lets later drawing leak
+                // past the caption buttons.
+                GraphicsState groupClip = g.Save();
+                g.SetClip(GroupTabsClipRect(group), CombineMode.Intersect);
 
-            // The dragged tab floats above its neighbors at the cursor position
-            if (_dragging && _dragIndex >= 0)
-            {
-                Rectangle rect = TabRect(_dragIndex);
-                rect.X = _dragVisualX;
-                DrawTab(g, _dragIndex, rect);
+                for (int i = 0; i < _tabs.Count; i++)
+                {
+                    if (GroupOf(_tabs[i]) != group)
+                    {
+                        continue;
+                    }
+                    if (!_dragging || i != _dragIndex)
+                    {
+                        DrawTab(g, i, TabRect(i));
+                    }
+                }
+
+                // The dragged tab floats above its neighbors at the cursor position
+                if (_dragging && _dragIndex >= 0 && GroupOf(_tabs[_dragIndex]) == group)
+                {
+                    Rectangle rect = TabRect(_dragIndex);
+                    rect.X = _dragVisualX;
+                    DrawTab(g, _dragIndex, rect);
+                }
+
+                g.Restore(groupClip);
             }
 
             for (int group = 0; group < GroupCount; group++)
             {
+                if (GroupOverflows(group))
+                {
+                    DrawScrollChevrons(g, group);
+                }
+
                 if (ShowNewTabButton)
                 {
                     DrawNewTabButton(g, group);
@@ -342,6 +383,51 @@ namespace FluentChromeTabs
             }
         }
 
+        /// <summary>
+        /// Left/right chevrons at the edges of an overflowing group, matching the
+        /// tab-list button's styling. A chevron dims once its direction is exhausted,
+        /// so the strip shows how much is left to scroll.
+        /// </summary>
+        private void DrawScrollChevrons(Graphics g, int group)
+        {
+            int offset = ScrollOffsetPx(group);
+            int max = MaxScrollOffsetPx(group);
+            DrawScrollChevron(g, group, true, offset > 0);
+            DrawScrollChevron(g, group, false, offset < max);
+        }
+
+        private void DrawScrollChevron(Graphics g, int group, bool leading, bool enabled)
+        {
+            Rectangle rect = ScrollChevronRect(group, leading);
+
+            if (enabled && _hoverScrollChevron == (leading ? group * 2 : group * 2 + 1) && !_dragging)
+            {
+                using (SolidBrush brush = new SolidBrush(Palette.Blend(_palette.Strip, _palette.TextActive, 0.12)))
+                using (GraphicsPath path = RoundedRectPath(rect, Dpi(4)))
+                {
+                    g.FillPath(brush, path);
+                }
+            }
+
+            Color color = enabled
+                ? StripTextColor(false)
+                : Palette.Blend(_palette.Strip, StripTextColor(false), 0.35);
+
+            // Two strokes meeting at the leading edge — the tab-list chevron rotated.
+            // Drawn in visual terms (left arrow points left on screen) so the mirrored
+            // RTL layout does not need a special case: GDI flips it with everything else.
+            using (Pen pen = GlyphPen(color))
+            {
+                float cx = rect.Left + rect.Width / 2f;
+                float cy = rect.Top + rect.Height / 2f;
+                float arm = 3.5f * GlyphScale;
+                float tipX = leading ? cx - arm / 2f : cx + arm / 2f;
+                float tailX = leading ? cx + arm / 2f : cx - arm / 2f;
+                g.DrawLine(pen, tailX, cy - arm, tipX, cy);
+                g.DrawLine(pen, tipX, cy, tailX, cy + arm);
+            }
+        }
+
         private void DrawCaptionButton(Graphics g, int htCode)
         {
             Rectangle rect = CaptionButtonRect(htCode);
@@ -434,6 +520,7 @@ namespace FluentChromeTabs
             bool overDivider = SplitStrip && p.Y < StripHeightPx && DividerHitRect.Contains(p);
             int overNewTab = -1;
             int overTabList = -1;
+            int overChevron = -1;
 
             if (p.Y < StripHeightPx)
             {
@@ -448,19 +535,33 @@ namespace FluentChromeTabs
                     {
                         overTabList = group;
                     }
+
+                    if (GroupOverflows(group))
+                    {
+                        if (ScrollChevronRect(group, true).Contains(p))
+                        {
+                            overChevron = group * 2;
+                        }
+                        else if (ScrollChevronRect(group, false).Contains(p))
+                        {
+                            overChevron = group * 2 + 1;
+                        }
+                    }
                 }
             }
 
             Cursor = overDivider ? Cursors.SizeWE : Cursors.Default;
 
             if (tab != _hoverTab || overClose != _hoverTabClose || overNewTab != _hoverNewTabGroup
-                || overTabList != _hoverTabListGroup || overDivider != _hoverDivider)
+                || overTabList != _hoverTabListGroup || overDivider != _hoverDivider
+                || overChevron != _hoverScrollChevron)
             {
                 _hoverTab = tab;
                 _hoverTabClose = overClose;
                 _hoverNewTabGroup = overNewTab;
                 _hoverTabListGroup = overTabList;
                 _hoverDivider = overDivider;
+                _hoverScrollChevron = overChevron;
                 InvalidateStrip();
                 UpdateToolTip();
             }
@@ -468,13 +569,15 @@ namespace FluentChromeTabs
 
         private void ClearHoverState()
         {
-            if (_hoverTab != -1 || _hoverNewTabGroup != -1 || _hoverTabClose || _hoverTabListGroup != -1 || _hoverDivider)
+            if (_hoverTab != -1 || _hoverNewTabGroup != -1 || _hoverTabClose || _hoverTabListGroup != -1
+                || _hoverDivider || _hoverScrollChevron != -1)
             {
                 _hoverTab = -1;
                 _hoverTabClose = false;
                 _hoverNewTabGroup = -1;
                 _hoverTabListGroup = -1;
                 _hoverDivider = false;
+                _hoverScrollChevron = -1;
                 InvalidateStrip();
                 UpdateToolTip();
             }

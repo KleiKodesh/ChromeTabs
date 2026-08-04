@@ -43,6 +43,30 @@ namespace FluentChromeTabs
                 return;
             }
 
+            // Scroll chevrons are tested before the tabs: a scrolled-out tab passes
+            // underneath them, and clicking the chevron must scroll rather than select
+            // whatever happens to be behind it.
+            if (e.Button == MouseButtons.Left)
+            {
+                for (int group = 0; group < GroupCount; group++)
+                {
+                    if (!GroupOverflows(group))
+                    {
+                        continue;
+                    }
+                    if (ScrollChevronRect(group, true).Contains(e.Location))
+                    {
+                        ScrollGroupByTab(group, -1);
+                        return;
+                    }
+                    if (ScrollChevronRect(group, false).Contains(e.Location))
+                    {
+                        ScrollGroupByTab(group, 1);
+                        return;
+                    }
+                }
+            }
+
             int tab = HitTab(e.Location);
 
             if (e.Button == MouseButtons.Left)
@@ -79,6 +103,30 @@ namespace FluentChromeTabs
             else if (e.Button == MouseButtons.Middle && tab >= 0 && _tabs[tab].CanClose)
             {
                 CloseTab(_tabs[tab]);
+            }
+        }
+
+        /// <summary>Wheeling over an overflowing strip scrolls it, as in a browser.</summary>
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+
+            if (!StripVisible || e.Y >= StripHeightPx || e.Delta == 0)
+            {
+                return;
+            }
+
+            for (int group = 0; group < GroupCount; group++)
+            {
+                if (!GroupOverflows(group))
+                {
+                    continue;
+                }
+                if (e.X >= GroupTabsLeftPx(group) && e.X <= GroupTabsRightPx(group))
+                {
+                    ScrollGroupByTab(group, e.Delta > 0 ? -1 : 1);
+                    return;
+                }
             }
         }
 
