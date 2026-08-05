@@ -15,6 +15,7 @@ namespace FluentChromeTabs
         internal const int WM_NCMOUSELEAVE = 0x02A2;
         internal const int WM_SYSCOMMAND = 0x0112;
         internal const int WM_SIZE = 0x0005;
+        internal const int WM_GETMINMAXINFO = 0x0024;
 
         internal const int SIZE_RESTORED = 0;
         internal const int SIZE_MINIMIZED = 1;
@@ -71,6 +72,16 @@ namespace FluentChromeTabs
         internal struct POINT
         {
             public int x, y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct MINMAXINFO
+        {
+            public POINT ptReserved;
+            public POINT ptMaxSize;
+            public POINT ptMaxPosition;
+            public POINT ptMinTrackSize;
+            public POINT ptMaxTrackSize;
         }
 
         [StructLayout(LayoutKind.Sequential)]

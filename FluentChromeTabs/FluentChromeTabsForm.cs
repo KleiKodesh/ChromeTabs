@@ -219,6 +219,19 @@ namespace FluentChromeTabs
         private int _tabHeight = 32;
 
         /// <summary>
+        /// How many minimum-width tabs must stay visible in the strip, enforced as a floor on how
+        /// narrow the user can drag the window. Below this the strip is all buttons and slivers and
+        /// the window stops being usable. Set to 0 to allow any width. Defaults to 2.
+        /// </summary>
+        public int MinVisibleTabs
+        {
+            get { return _minVisibleTabs; }
+            set { _minVisibleTabs = Math.Max(0, value); }
+        }
+
+        private int _minVisibleTabs = 2;
+
+        /// <summary>
         /// Whether the window's <see cref="Form.Icon" /> is drawn in the strip, in a slot just before
         /// the start of the tabs (the visual right in a mirrored/RTL window). Defaults to false.
         /// </summary>
@@ -909,6 +922,32 @@ namespace FluentChromeTabs
             get { return Dpi(28); }
         }
 
+        /// <summary>
+        /// Narrowest the window may be dragged: everything the strip always shows, plus room for
+        /// <see cref="MinVisibleTabs" /> tabs at their minimum width. Without this floor the strip
+        /// squeezes until the tabs are unreachable slivers behind the chevrons and buttons.
+        ///
+        /// A split strip needs the furniture twice over — each region has its own buttons and its
+        /// own tabs to keep visible — and the caption buttons are counted once for the window.
+        /// </summary>
+        private int MinClientWidthPx
+        {
+            get
+            {
+                int perRegion = (_showTabListButton ? TabListButtonSizePx + Dpi(6) : 0)
+                    + (ShowNewTabButton ? NewTabButtonSizePx + Dpi(8) : 0)
+                    + _minVisibleTabs * (MinTabWidthPx + TabGapPx)
+                    + 2 * ScrollChevronInsetPx
+                    + Dpi(8);
+
+                int regions = _splitStrip ? 2 : 1;
+                int chrome = 3 * CaptionButtonWidthPx + Dpi(8)
+                    + (HasWindowIcon ? WindowIconSizePx + Dpi(10) : 0);
+
+                return regions * perRegion + chrome;
+            }
+        }
+
         /// <summary>X coordinate of the split divider (pixel pin when set, else <see cref="SplitRatio" />).</summary>
         private int DividerXPx
         {
@@ -971,7 +1010,18 @@ namespace FluentChromeTabs
         /// </summary>
         private int ScrollChevronInsetPx
         {
-            get { return Dpi(16) + Dpi(4); }
+            get { return ScrollChevronButtonWidthPx; }
+        }
+
+        /// <summary>
+        /// Width of the chevron's opaque pill. The pill is the full width of the inset, so
+        /// the clip band starts exactly where the pill ends: a tab scrolling out slides
+        /// behind the pill and is swallowed by it, rather than being cut off in mid-air a
+        /// few pixels away from a floating glyph.
+        /// </summary>
+        private int ScrollChevronButtonWidthPx
+        {
+            get { return Dpi(28); }
         }
 
         private Rectangle GroupTabsClipRect(int group)
@@ -1177,15 +1227,23 @@ namespace FluentChromeTabs
                 TabHeightPx);
         }
 
-        /// <summary>The left/right chevron buttons, drawn at the region edges while it overflows.</summary>
+        /// <summary>
+        /// The left/right chevron buttons, drawn at the edges of the tab band while the
+        /// group overflows. Tab-card height and full inset width, so each reads as an
+        /// opaque wall the tabs pass behind — and so the whole gap is clickable, not just
+        /// the glyph.
+        ///
+        /// Both are pinned to the band that GroupTabsClipRect insets, NOT to the region
+        /// edge: an overflowing group's tabs run the full width of that band, so a chevron
+        /// placed outside it would leave tabs spilling past the button on that side.
+        /// </summary>
         private Rectangle ScrollChevronRect(int group, bool leading)
         {
-            int size = Dpi(16);
+            int width = ScrollChevronButtonWidthPx;
             int tabTop = StripHeightPx - TabHeightPx - TabBottomMarginPx;
-            int y = tabTop + (TabHeightPx - size) / 2;
             return leading
-                ? new Rectangle(GroupTabsLeftPx(group), y, size, size)
-                : new Rectangle(GroupTabsRightPx(group) - size, y, size, size);
+                ? new Rectangle(GroupTabsLeftPx(group), tabTop, width, TabHeightPx)
+                : new Rectangle(GroupTabsRightPx(group) - width, tabTop, width, TabHeightPx);
         }
 
         private Rectangle TabCloseRect(Rectangle tabRect)
@@ -1222,12 +1280,19 @@ namespace FluentChromeTabs
             int last = count > 0
                 ? GroupTabsLeftPx(group) + count * (TabWidthPx(group) + TabGapPx) - TabGapPx
                 : GroupTabsLeftPx(group);
+
+            // The "+" trails the last tab, but an overflowing group's tabs extend well past
+            // the visible band, so the untethered position would put it off-screen behind
+            // the caption buttons. GroupTabsRightPx already reserves its slot at the region
+            // edge for exactly this case — clamp to it so the button stops there and the
+            // trailing chevron stays the rightmost thing in the band.
             int size = NewTabButtonSizePx;
+            int clamped = Math.Min(last + Dpi(8), GroupTabsRightPx(group) + Dpi(8));
             int tabTop = StripHeightPx - TabHeightPx - TabBottomMarginPx;
-            return new Rectangle(last + Dpi(8), tabTop + (TabHeightPx - size) / 2, size, size);
+            return new Rectangle(clamped, tabTop + (TabHeightPx - size) / 2, size, size);
         }
 
-        /// <summary>True when the point hits any region's "+" or tab-list toggle.</summary>
+        /// <summary>True when the point hits any region's "+", tab-list toggle or scroll chevron.</summary>
         private bool HitsStripButton(Point p)
         {
             for (int group = 0; group < GroupCount; group++)
@@ -1238,6 +1303,15 @@ namespace FluentChromeTabs
                 }
 
                 if (ShowTabListButton && TabListButtonRect(group).Contains(p))
+                {
+                    return true;
+                }
+
+                // Without this the chevrons hit-test as HTCAPTION, so the OS swallows the
+                // mouse into a window drag and WinForms never sees the move or the click —
+                // no hover highlight, and pressing one drags the window instead of scrolling.
+                if (GroupOverflows(group)
+                    && (ScrollChevronRect(group, true).Contains(p) || ScrollChevronRect(group, false).Contains(p)))
                 {
                     return true;
                 }

@@ -66,6 +66,35 @@ namespace FluentChromeTabs
 
             switch (m.Msg)
             {
+                case NativeMethods.WM_GETMINMAXINFO:
+                {
+                    // Enforced here rather than via Form.MinimumSize so it tracks the live strip
+                    // metrics (DPI, split mode, which buttons are on) and cannot be overwritten by
+                    // a host setting MinimumSize for its own content reasons. Only the width is
+                    // pinned — height is the host's business.
+                    base.WndProc(ref m);
+
+                    // WM_GETMINMAXINFO arrives before the handle has been sized, when ClientSize is
+                    // still empty and the frame delta below would be meaningless.
+                    if (StripVisible && _minVisibleTabs > 0 && IsHandleCreated && ClientSize.Width > 0)
+                    {
+                        NativeMethods.MINMAXINFO info =
+                            (NativeMethods.MINMAXINFO) Marshal.PtrToStructure(m.LParam, typeof(NativeMethods.MINMAXINFO));
+
+                        // MINMAXINFO is in window coordinates; the strip metrics are client ones.
+                        int frame = Math.Max(0, Width - ClientSize.Width);
+                        int minimum = MinClientWidthPx + frame;
+
+                        if (info.ptMinTrackSize.x < minimum)
+                        {
+                            info.ptMinTrackSize.x = minimum;
+                            Marshal.StructureToPtr(info, m.LParam, false);
+                        }
+                    }
+
+                    return;
+                }
+
                 case NativeMethods.WM_NCCALCSIZE:
                     if (m.WParam != IntPtr.Zero)
                     {

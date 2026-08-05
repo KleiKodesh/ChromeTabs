@@ -264,9 +264,16 @@ namespace FluentChromeTabs
             bool showClose = TabShowsClose(index);
             int textRight = showClose ? TabCloseRect(rect).Left - Dpi(4) : rect.Right - Dpi(8);
 
-            // TextRenderer.DrawText ignores the strip clip set in OnPaint, so keep the text box
-            // itself clear of the caption buttons (matters on tabs that overrun a narrow strip).
-            textRight = Math.Min(textRight, StripContentRightPx);
+            // TextRenderer.DrawText ignores the strip clip set in OnPaint, so the text box has
+            // to be clamped by hand. Clamp to the group's tab band, not just to the caption
+            // buttons: on an overflowing group the band stops short of them at the trailing
+            // chevron, and a title allowed to run to StripContentRightPx would paint straight
+            // over that chevron and the "+" slot while its own card was correctly clipped.
+            Rectangle band = GroupTabsClipRect(GroupOf(tab));
+            textRight = Math.Min(textRight, Math.Min(band.Right, StripContentRightPx));
+
+            // Same on the leading side, for a tab scrolled halfway under the left chevron.
+            textLeft = Math.Max(textLeft, band.Left);
 
             // No EndEllipsis: on narrow tabs the "…" just eats space the text could use —
             // hard-clip instead (the tooltip still surfaces the full title).
@@ -320,6 +327,35 @@ namespace FluentChromeTabs
                     g.DrawLine(pen, ccx - arm, ccy + arm, ccx + arm, ccy - arm);
                 }
             }
+        }
+
+        /// <summary>
+        /// A pill rounded on its outward side and square on the side the tabs come from,
+        /// so the tab band ends against a straight edge — the mouth of the tunnel the
+        /// tabs scroll into. Drawn in visual terms; GDI mirrors it for RTL along with
+        /// everything else in the strip.
+        /// </summary>
+        private static GraphicsPath TunnelMouthPath(Rectangle r, int radius, bool leading)
+        {
+            GraphicsPath path = new GraphicsPath();
+
+            if (leading)
+            {
+                // Rounded on the left, flat on the right
+                path.AddArc(r.Left, r.Top, radius * 2, radius * 2, 180, 90);
+                path.AddLine(r.Right, r.Top, r.Right, r.Bottom);
+                path.AddArc(r.Left, r.Bottom - radius * 2, radius * 2, radius * 2, 90, 90);
+            }
+            else
+            {
+                // Flat on the left, rounded on the right
+                path.AddLine(r.Left, r.Bottom, r.Left, r.Top);
+                path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90);
+                path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90);
+            }
+
+            path.CloseFigure();
+            return path;
         }
 
         private static GraphicsPath RoundedRectPath(Rectangle r, int radius)
@@ -399,14 +435,19 @@ namespace FluentChromeTabs
         private void DrawScrollChevron(Graphics g, int group, bool leading, bool enabled)
         {
             Rectangle rect = ScrollChevronRect(group, leading);
+            bool hot = enabled && _hoverScrollChevron == (leading ? group * 2 : group * 2 + 1) && !_dragging;
 
-            if (enabled && _hoverScrollChevron == (leading ? group * 2 : group * 2 + 1) && !_dragging)
+            // Always filled with the strip color, not just when hot: this pill is what a
+            // tab scrolling out of view disappears behind. A transparent button would let
+            // the outgoing tab show through, which reads as a tab overlapping the button
+            // rather than passing behind it. Squared off on the tab-facing side so there
+            // is no rounded notch for a sliver of tab to peek through.
+            Color fill = hot ? Palette.Blend(_palette.Strip, _palette.TextActive, 0.12) : _palette.Strip;
+
+            using (SolidBrush brush = new SolidBrush(fill))
+            using (GraphicsPath path = TunnelMouthPath(rect, Dpi(6), leading))
             {
-                using (SolidBrush brush = new SolidBrush(Palette.Blend(_palette.Strip, _palette.TextActive, 0.12)))
-                using (GraphicsPath path = RoundedRectPath(rect, Dpi(4)))
-                {
-                    g.FillPath(brush, path);
-                }
+                g.FillPath(brush, path);
             }
 
             Color color = enabled
