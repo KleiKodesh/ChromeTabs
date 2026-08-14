@@ -185,9 +185,9 @@ namespace FluentChromeTabs
                 }
             }
 
-            // Divider between the two split regions — a seamless extension of the Vue
-            // split divider below it: same 4px thickness, border color, and 50% accent
-            // highlight while hovered or dragged.
+            // Divider between the two split regions — a seamless extension of the content
+            // split divider below it: same hairline thickness, border color, and 50%
+            // accent highlight while hovered or dragged.
             if (SplitStrip)
             {
                 Color color = _hoverDivider || _dividerDragging
@@ -201,7 +201,11 @@ namespace FluentChromeTabs
 
                 using (SolidBrush brush = new SolidBrush(color))
                 {
-                    int width = _dividerOverrideLeft >= 0 ? _dividerOverrideWidth : Dpi(4);
+                    // Unpinned fallback is a 1px hairline, matching what a host content
+                    // divider draws. It used to be Dpi(4), which stopped matching when the
+                    // hosts went thin - so an unpinned strip drew a bar four times the
+                    // width of the divider it is supposed to continue.
+                    int width = _dividerOverrideLeft >= 0 ? _dividerOverrideWidth : Dpi(1);
                     int left = _dividerOverrideLeft >= 0 ? _dividerOverrideLeft : DividerXPx - width / 2;
                     g.FillRectangle(brush, left, Dpi(6), width, StripHeightPx - Dpi(6));
                 }
@@ -337,34 +341,58 @@ namespace FluentChromeTabs
         /// </summary>
         private static GraphicsPath TunnelMouthPath(Rectangle r, int radius, bool leading)
         {
+            // Half-pixel inset for the same reason as RoundedRectPath — and so these pills
+            // start and end on exactly the same rows as the tab cards beside them. The flat
+            // side keeps the full extent: it is a butt joint against the tab band, not an
+            // edge that needs to read as rounded.
+            float left = leading ? r.Left + 0.5f : r.Left;
+            float top = r.Top + 0.5f;
+            float right = leading ? r.Right : r.Right - 0.5f;
+            float bottom = r.Bottom - 0.5f;
+            float d = radius * 2f;
+
             GraphicsPath path = new GraphicsPath();
 
             if (leading)
             {
                 // Rounded on the left, flat on the right
-                path.AddArc(r.Left, r.Top, radius * 2, radius * 2, 180, 90);
-                path.AddLine(r.Right, r.Top, r.Right, r.Bottom);
-                path.AddArc(r.Left, r.Bottom - radius * 2, radius * 2, radius * 2, 90, 90);
+                path.AddArc(left, top, d, d, 180, 90);
+                path.AddLine(right, top, right, bottom);
+                path.AddArc(left, bottom - d, d, d, 90, 90);
             }
             else
             {
                 // Flat on the left, rounded on the right
-                path.AddLine(r.Left, r.Bottom, r.Left, r.Top);
-                path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90);
-                path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90);
+                path.AddLine(left, bottom, left, top);
+                path.AddArc(right - d, top, d, d, 270, 90);
+                path.AddArc(right - d, bottom - d, d, d, 0, 90);
             }
 
             path.CloseFigure();
             return path;
         }
 
+        /// <summary>
+        /// Rounded rectangle inset by half a pixel on every side, so a 1px DrawPath outline
+        /// falls wholly INSIDE <paramref name="r" /> instead of straddling its edges. On the
+        /// exclusive Right/Bottom edges that outer half would otherwise be cut by the strip
+        /// clip (or by the tab band, which a full-width tab sits flush against), leaving the
+        /// card looking shaved off along one side. Insetting symmetrically keeps the shape
+        /// centered, so no edge lands a pixel off from the one opposite it.
+        /// </summary>
         private static GraphicsPath RoundedRectPath(Rectangle r, int radius)
         {
+            float left = r.Left + 0.5f;
+            float top = r.Top + 0.5f;
+            float right = r.Right - 0.5f;
+            float bottom = r.Bottom - 0.5f;
+            float d = radius * 2f;
+
             GraphicsPath path = new GraphicsPath();
-            path.AddArc(r.Left, r.Top, radius * 2, radius * 2, 180, 90);
-            path.AddArc(r.Right - radius * 2, r.Top, radius * 2, radius * 2, 270, 90);
-            path.AddArc(r.Right - radius * 2, r.Bottom - radius * 2, radius * 2, radius * 2, 0, 90);
-            path.AddArc(r.Left, r.Bottom - radius * 2, radius * 2, radius * 2, 90, 90);
+            path.AddArc(left, top, d, d, 180, 90);
+            path.AddArc(right - d, top, d, d, 270, 90);
+            path.AddArc(right - d, bottom - d, d, d, 0, 90);
+            path.AddArc(left, bottom - d, d, d, 90, 90);
             path.CloseFigure();
             return path;
         }
