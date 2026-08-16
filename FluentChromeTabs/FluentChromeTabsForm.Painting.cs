@@ -288,24 +288,15 @@ namespace FluentChromeTabs
                 // RTL reading order for Hebrew/Arabic titles. Only when the window is NOT
                 // mirrored: a WS_EX_LAYOUTRTL (RightToLeftLayout) DC already defaults to RTL
                 // reading, and adding RightToLeft on top toggles it BACK to LTR — which put
-                // string-edge neutrals (a trailing "*") and Latin runs ("PDF:") at the wrong
-                // visual end while pure-Hebrew titles looked fine under either base.
+                // string-edge neutrals (a trailing "*") and Latin runs at the wrong visual
+                // end while pure-Hebrew titles looked fine under either base.
                 // (In a mirrored window "Left" still renders at the visual right.)
                 textFlags |= TextFormatFlags.RightToLeft;
             }
 
             Rectangle textRect = new Rectangle(textLeft, rect.Top, Math.Max(0, textRight - textLeft), rect.Height);
 
-            // Prefer the longer WideTitle ("type: title") when it fits the tab whole;
-            // on narrow tabs the clean short Title wins over a clipped prefix.
-            string caption = tab.Title;
-            if (!string.IsNullOrEmpty(tab.WideTitle) && tab.WideTitle != tab.Title
-                && TextRenderer.MeasureText(tab.WideTitle, Font).Width <= textRect.Width)
-            {
-                caption = tab.WideTitle;
-            }
-
-            TextRenderer.DrawText(g, caption, Font, textRect, StripTextColor(active), textFlags);
+            TextRenderer.DrawText(g, tab.Title, Font, textRect, StripTextColor(active), textFlags);
 
             if (showClose)
             {
