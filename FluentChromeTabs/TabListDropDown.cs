@@ -68,6 +68,13 @@ namespace FluentChromeTabs
     /// Keyboard: Up/Down/Home/End move the focus row, Enter activates, Esc closes.
     /// Implemented as an owned borderless form so click/tap-outside reliably dismisses it
     /// (via Deactivate), which a ToolStripDropDown hosting a focusable control does not do.
+    ///
+    /// <para>
+    /// Quick-switch mode (<see cref="BeginQuickSwitch" />) turns the popup into an Alt+Tab-style
+    /// switcher: the caller opens it on Ctrl+Tab, each further Tab steps the focus row, and
+    /// releasing Ctrl activates whatever is focused. Nothing is activated until release, so
+    /// stepping past five tabs costs one activation instead of five.
+    /// </para>
     /// </summary>
     internal sealed class TabListDropDown : Form
     {
@@ -95,6 +102,12 @@ namespace FluentChromeTabs
         private int _focusRow = -1;
         private int _scrollY;
         private string _toolTipShownFor;
+
+        // Quick-switch (Ctrl held) state: while armed the popup activates nothing until
+        // Ctrl comes back up. The opening keypress steps the highlight immediately, so a
+        // press-and-release with no further Tab still switches by one, like Alt+Tab.
+        private bool _quickSwitch;
+        private Timer _ctrlWatchdog;
 
         public TabListDropDown(FluentChromeTabsForm owner, List<TabListSection> sections)
         {
@@ -178,16 +191,141 @@ namespace FluentChromeTabs
         protected override void OnDeactivate(EventArgs e)
         {
             base.OnDeactivate(e);
+
+            // Losing activation mid-switch means the user went somewhere else (Alt+Tab to
+            // another app) rather than picking a tab, so cancel like Esc does. Committing
+            // here would switch their tab behind their back while they were away — and the
+            // Ctrl keyup that should have committed goes to the other app, never to us.
+            _quickSwitch = false;
             Close();
+        }
+
+        // ── Quick switch (Ctrl+Tab) ─────────────────────────────────────────────────
+
+        /// <summary>
+        /// Arms Alt+Tab-style behaviour: the popup stays up while Ctrl is held, Tab /
+        /// Shift+Tab step the focus row, and releasing Ctrl activates the focused row.
+        /// <paramref name="step" /> applies the opening keypress's own move.
+        /// </summary>
+        public void BeginQuickSwitch(int step)
+        {
+            _quickSwitch = true;
+            StepQuickSwitch(step);
+
+            // A keyup can be missed outright — the user can Alt+Tab away mid-hold, or
+            // release over another window — which would strand the popup on screen with
+            // no way to dismiss it. Poll the real key state as a backstop. Stopped from
+            // StopCtrlWatchdog on every close path, not just its own tick.
+            _ctrlWatchdog = new Timer { Interval = 100 };
+            _ctrlWatchdog.Tick += (s, e) =>
+            {
+                if (IsDisposed || !_quickSwitch)
+                {
+                    StopCtrlWatchdog();
+                    return;
+                }
+
+                if (!IsControlDown)
+                {
+                    StopCtrlWatchdog();
+                    CommitQuickSwitch();
+                }
+            };
+            _ctrlWatchdog.Start();
+        }
+
+        private void StopCtrlWatchdog()
+        {
+            if (_ctrlWatchdog == null)
+            {
+                return;
+            }
+
+            _ctrlWatchdog.Stop();
+            _ctrlWatchdog.Dispose();
+            _ctrlWatchdog = null;
+        }
+
+        private static bool IsControlDown
+        {
+            get { return (NativeMethods.GetKeyState(NativeMethods.VK_CONTROL) & 0x8000) != 0; }
+        }
+
+        /// <summary>
+        /// Steps the highlight from outside the popup — the path taken when the host forwards a
+        /// repeat Ctrl+Tab that the popup did not receive itself (it may not hold focus yet, or
+        /// the keystroke may have arrived through the host's own bridge).
+        /// </summary>
+        public void StepQuickSwitchExternal(int step)
+        {
+            if (!_quickSwitch)
+            {
+                return;
+            }
+
+            StepQuickSwitch(step);
+        }
+
+        /// <summary>Moves the highlight without activating anything.</summary>
+        private void StepQuickSwitch(int step)
+        {
+            MoveFocus(step >= 0 ? 1 : -1);
+        }
+
+        /// <summary>Ctrl came up — activate the highlighted row and close.</summary>
+        private void CommitQuickSwitch()
+        {
+            if (!_quickSwitch)
+            {
+                return;
+            }
+
+            // Cleared before activating: ActivateRow closes the popup, and the resulting
+            // OnDeactivate must not re-enter this and activate a second time.
+            _quickSwitch = false;
+
+            if (_focusRow >= 0 && _rows[_focusRow].Kind == RowKindItem)
+            {
+                ActivateRow(_focusRow);
+            }
+            else
+            {
+                Close();
+            }
+        }
+
+        // Ctrl is released while this popup holds focus, so its own KeyUp is the primary
+        // signal; the watchdog above only covers the cases where it never arrives.
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+
+            if (_quickSwitch && e.KeyCode == Keys.ControlKey)
+            {
+                CommitQuickSwitch();
+            }
         }
 
         // ── Keyboard navigation ─────────────────────────────────────────────────────
 
         protected override bool ProcessDialogKey(Keys keyData)
         {
+            // While Ctrl is held, Tab / Shift+Tab keep stepping the highlight. WinForms
+            // would otherwise treat Tab as focus traversal and never reach the switch.
+            // The live key state is checked too, not just _quickSwitch: the watchdog only
+            // notices a missed Ctrl keyup on its next tick, and a plain Tab pressed inside
+            // that window must not step the highlight.
+            if (_quickSwitch && IsControlDown && (keyData & Keys.KeyCode) == Keys.Tab)
+            {
+                StepQuickSwitch((keyData & Keys.Shift) != 0 ? -1 : 1);
+                return true;
+            }
+
             switch (keyData)
             {
                 case Keys.Escape:
+                    // Abandon the switch: close without activating the highlighted row.
+                    _quickSwitch = false;
                     Close();
                     return true;
 
@@ -585,14 +723,31 @@ namespace FluentChromeTabs
         private void ActivateRow(int row)
         {
             TabListItem item = _rows[row].Item;
+
+            // Any activation ends a quick switch, whoever started it. Clicking a row while
+            // Ctrl is still held would otherwise close the popup, and the resulting
+            // OnDeactivate would commit the HIGHLIGHTED row on top of the CLICKED one —
+            // two activations, landing on the wrong tab.
+            _quickSwitch = false;
+
             Close();
             item.Activate?.Invoke();
+        }
+
+        // Every close path funnels through here — Ctrl release, Esc, a click on a row, a
+        // click outside — so it is the one place the watchdog is guaranteed to be stopped.
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _quickSwitch = false;
+            StopCtrlWatchdog();
+            base.OnFormClosed(e);
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                StopCtrlWatchdog();
                 _toolTip?.Dispose();
                 _headerFont?.Dispose();
                 _headerFont = null;

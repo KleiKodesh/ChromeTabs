@@ -635,6 +635,15 @@ namespace FluentChromeTabs
         }
 
         /// <summary>
+        /// The region a tab-list popup should open against: the selected tab's own region while
+        /// the strip is split (that region owns the visible active tab), and region 0 otherwise.
+        /// </summary>
+        public int SelectedTabGroup
+        {
+            get { return _splitStrip && SelectedTab != null ? GroupOf(SelectedTab) : 0; }
+        }
+
+        /// <summary>
         /// Opens the Fluent-styled popup listing the region's open tabs plus any host-provided
         /// sections; picking an entry activates it. Acts as a toggle: invoking it while
         /// the popup is open (or immediately after the opening click dismissed it via
@@ -642,15 +651,36 @@ namespace FluentChromeTabs
         /// </summary>
         public void ShowTabListMenu(int group)
         {
+            ShowTabListMenu(group, 0);
+        }
+
+        /// <summary>
+        /// Opens the tab list as an Alt+Tab-style quick switcher when <paramref name="quickSwitchStep" />
+        /// is non-zero: the popup stays up while Ctrl is held, further Tab / Shift+Tab presses step
+        /// the highlight by ±1, and releasing Ctrl activates the highlighted tab. The step given here
+        /// is applied immediately, so one Ctrl+Tab press-and-release behaves like a plain "next tab".
+        /// While the switcher is already open, another call just steps it instead of toggling it shut.
+        /// </summary>
+        public void ShowTabListMenu(int group, int quickSwitchStep)
+        {
             if (IsTabListOpen)
             {
+                // Ctrl is still down and the user pressed Tab again — step, don't toggle.
+                if (quickSwitchStep != 0)
+                {
+                    _tabListDropDown.StepQuickSwitchExternal(quickSwitchStep);
+                    return;
+                }
+
                 _tabListDropDown.Close();
                 return;
             }
 
             // Reclicking the toggle: the mousedown first deactivates the popup (closing it),
             // then reaches us — an immediate reopen would make the toggle feel stuck open.
-            if (Environment.TickCount - _tabListClosedTick < 300)
+            // The guard is for the pointer only: a Ctrl+Tab arriving inside that window is a
+            // deliberate reopen, and swallowing it would make the switcher feel broken.
+            if (quickSwitchStep == 0 && Environment.TickCount - _tabListClosedTick < 300)
             {
                 return;
             }
@@ -713,6 +743,13 @@ namespace FluentChromeTabs
 
             drop.Location = new Point(x, y);
             drop.Show(this);
+
+            // Arm after Show: the popup must own OS focus before it can see the Ctrl keyup.
+            if (quickSwitchStep != 0)
+            {
+                drop.BeginQuickSwitch(quickSwitchStep);
+            }
+
             InvalidateStrip();
         }
 
@@ -1481,15 +1518,20 @@ namespace FluentChromeTabs
                 return true;
             }
 
+            // Ctrl+Tab opens the tab list as a hold-to-scroll switcher rather than hopping
+            // one tab per press. ProcessCmdKey runs before the focused child control sees
+            // the key, so this is also the path taken when a hosted control (e.g. a
+            // WebView) has focus and would otherwise handle Ctrl+Tab itself — routing both
+            // here keeps the gesture identical wherever focus happens to be.
             if (keyData == (Keys.Control | Keys.Tab))
             {
-                CycleTab(1);
+                ShowTabListMenu(SelectedTabGroup, 1);
                 return true;
             }
 
             if (keyData == (Keys.Control | Keys.Shift | Keys.Tab))
             {
-                CycleTab(-1);
+                ShowTabListMenu(SelectedTabGroup, -1);
                 return true;
             }
 

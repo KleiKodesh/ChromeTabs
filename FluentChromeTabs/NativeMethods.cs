@@ -48,6 +48,8 @@ namespace FluentChromeTabs
         internal const uint TME_LEAVE = 0x0002;
         internal const uint TME_NONCLIENT = 0x0010;
 
+        internal const int VK_CONTROL = 0x11;
+
         [StructLayout(LayoutKind.Sequential)]
         internal struct RECT
         {
@@ -101,6 +103,9 @@ namespace FluentChromeTabs
 
         [DllImport("user32.dll")]
         internal static extern int GetSystemMetrics(int index);
+
+        [DllImport("user32.dll")]
+        internal static extern short GetKeyState(int virtualKey);
 
         [DllImport("user32.dll")]
         internal static extern uint GetDpiForWindow(IntPtr hwnd);
