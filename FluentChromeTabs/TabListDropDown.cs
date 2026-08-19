@@ -63,7 +63,8 @@ namespace FluentChromeTabs
     /// truncation tooltips, and manual RTL layout (the popup itself is never mirrored —
     /// alignment is computed explicitly). Item rows match the strip's tab height so mouse and
     /// touch targets feel identical to the tabs themselves; taps work through Windows'
-    /// touch-to-mouse promotion (activation on mouse-up, no hover dependency).
+    /// touch-to-mouse promotion (activation on mouse-up, no hover dependency), and a
+    /// vertical finger drag pans an overflowing list.
     ///
     /// Keyboard: Up/Down/Home/End move the focus row, Enter activates, Esc closes.
     /// Implemented as an owned borderless form so click/tap-outside reliably dismisses it
@@ -102,6 +103,13 @@ namespace FluentChromeTabs
         private int _focusRow = -1;
         private int _scrollY;
         private string _toolTipShownFor;
+
+        // Touch panning: a finger press on an overflowing list arms a pan; once it moves
+        // past the jitter threshold the list follows the finger and the release is not a tap.
+        private bool _panEligible;
+        private bool _panning;
+        private int _panStartY;
+        private int _panStartScroll;
 
         // Quick-switch (Ctrl held) state: while armed the popup activates nothing until
         // Ctrl comes back up. The opening keypress steps the highlight immediately, so a
@@ -175,6 +183,20 @@ namespace FluentChromeTabs
                 cp.ClassStyle |= CS_DROPSHADOW;
                 return cp;
             }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            // Touch presses must arrive immediately as promoted mouse messages so a finger
+            // can pan the list live and taps land without the press-and-hold delay; nothing
+            // in the popup uses the press-and-hold right-click gesture.
+            if (m.Msg == NativeMethods.WM_TABLET_QUERYSYSTEMGESTURESTATUS)
+            {
+                m.Result = new IntPtr(NativeMethods.TABLET_DISABLE_PRESSANDHOLD | NativeMethods.TABLET_DISABLE_FLICKS);
+                return;
+            }
+
+            base.WndProc(ref m);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -638,9 +660,38 @@ namespace FluentChromeTabs
 
         // ── Mouse / touch ───────────────────────────────────────────────────────────
 
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+
+            if (e.Button == MouseButtons.Left)
+            {
+                // Mouse users keep the wheel; only a finger press arms panning, so a sloppy
+                // mouse click can never scroll the list out from under its own release
+                _panEligible = NativeMethods.IsPromotedTouchMessage() && MaxScroll > 0;
+                _panStartY = e.Y;
+                _panStartScroll = _scrollY;
+            }
+        }
+
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+
+            if (_panEligible && (_panning || Math.Abs(e.Y - _panStartY) > S(8)))
+            {
+                if (!_panning)
+                {
+                    // The finger is panning, not aiming — hover highlight and tooltip come off
+                    _panning = true;
+                    _hoverRow = -1;
+                    UpdateToolTip(-1);
+                    Invalidate();
+                }
+
+                ScrollTo(_panStartScroll - (e.Y - _panStartY));
+                return;
+            }
 
             int row = HitRow(e.Location);
 
@@ -707,7 +758,18 @@ namespace FluentChromeTabs
         {
             base.OnMouseUp(e);
 
+            // Only the left-button up ends the pan — a synthesized non-left up mid-pan
+            // must not hand the eventual left-up back to row activation
             if (e.Button != MouseButtons.Left)
+            {
+                return;
+            }
+
+            bool panned = _panning;
+            _panning = false;
+            _panEligible = false;
+
+            if (panned)
             {
                 return;
             }

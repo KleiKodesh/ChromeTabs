@@ -263,6 +263,27 @@ namespace FluentChromeTabs
                     }
 
                     break;
+
+                case NativeMethods.WM_TABLET_QUERYSYSTEMGESTURESTATUS:
+                {
+                    // A touch press on a tab (or another interactive strip element) must arrive
+                    // as an immediate mouse-down streaming promoted mouse-moves, or taps feel
+                    // laggy and touch drag-reorder never starts: Windows would otherwise hold
+                    // the press back for the press-and-hold (right-click) gesture and interpret
+                    // horizontal drags as flicks. Empty strip area keeps the default gestures —
+                    // there press-and-hold is the only touch path to the system menu, and window
+                    // dragging is handled natively through HTCAPTION.
+                    Point p = PointToClient(ScreenPointFromLParam(m.LParam));
+
+                    if (StripVisible && p.Y < StripHeightPx
+                        && (HitTab(p) >= 0 || HitsStripButton(p) || (SplitStrip && DividerHitRect.Contains(p))))
+                    {
+                        m.Result = new IntPtr(NativeMethods.TABLET_DISABLE_PRESSANDHOLD | NativeMethods.TABLET_DISABLE_FLICKS);
+                        return;
+                    }
+
+                    break;
+                }
             }
 
             base.WndProc(ref m);

@@ -50,6 +50,21 @@ namespace FluentChromeTabs
 
         internal const int VK_CONTROL = 0x11;
 
+        internal const int WM_TABLET_QUERYSYSTEMGESTURESTATUS = 0x02CC;
+        internal const int TABLET_DISABLE_PRESSANDHOLD = 0x00000001;
+        internal const int TABLET_DISABLE_FLICKS = 0x00010000;
+
+        // GetMessageExtraInfo signature Windows stamps on mouse messages it synthesized
+        // from touch or pen input (documented as MI_WP_SIGNATURE / its mask).
+        private const long MI_WP_SIGNATURE = 0xFF515700;
+        private const long MI_SIGNATURE_MASK = 0xFFFFFF00;
+
+        /// <summary>True while handling a mouse message that Windows promoted from touch or pen input.</summary>
+        internal static bool IsPromotedTouchMessage()
+        {
+            return ((long) GetMessageExtraInfo() & MI_SIGNATURE_MASK) == MI_WP_SIGNATURE;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         internal struct RECT
         {
@@ -136,5 +151,8 @@ namespace FluentChromeTabs
 
         [DllImport("user32.dll")]
         internal static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT tme);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetMessageExtraInfo();
     }
 }

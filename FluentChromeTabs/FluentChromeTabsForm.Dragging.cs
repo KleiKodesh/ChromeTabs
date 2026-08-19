@@ -13,6 +13,7 @@ namespace FluentChromeTabs
         private int _mouseDownTab = -1;
         private bool _mouseDownOnClose;
         private Point _mouseDownPoint;
+        private bool _mouseDownWasTouch;
 
         private bool _dragging;
         private int _dragIndex = -1;
@@ -76,6 +77,7 @@ namespace FluentChromeTabs
                     _mouseDownOnClose = TabShowsClose(tab) && TabCloseRect(TabRect(tab)).Contains(e.Location);
                     _mouseDownTab = tab;
                     _mouseDownPoint = e.Location;
+                    _mouseDownWasTouch = NativeMethods.IsPromotedTouchMessage();
 
                     if (!_mouseDownOnClose)
                     {
@@ -157,11 +159,23 @@ namespace FluentChromeTabs
                 int dx = Math.Abs(e.X - _mouseDownPoint.X);
                 int dy = Math.Abs(e.Y - _mouseDownPoint.Y);
 
-                if (dx > SystemInformation.DragSize.Width || dy > SystemInformation.DragSize.Height)
+                // A finger jitters more than a mouse — with the mouse threshold a plain
+                // tap can misread as the start of a drag
+                int thresholdX = _mouseDownWasTouch ? Dpi(10) : SystemInformation.DragSize.Width;
+                int thresholdY = _mouseDownWasTouch ? Dpi(10) : SystemInformation.DragSize.Height;
+
+                if (dx > thresholdX || dy > thresholdY)
                 {
                     BeginDrag(e.Location);
                     return;
                 }
+            }
+
+            // A trailing promoted move can arrive after a touch-up, parked at the lift
+            // point — it must not re-apply the hover the up just cleared
+            if (e.Button == MouseButtons.None && NativeMethods.IsPromotedTouchMessage())
+            {
+                return;
             }
 
             UpdateHoverState(e.Location);
@@ -193,6 +207,14 @@ namespace FluentChromeTabs
 
             _mouseDownTab = -1;
             _mouseDownOnClose = false;
+            _mouseDownWasTouch = false;
+
+            // A lifted finger leaves no cursor behind to move away, so without this the
+            // tab under the last tap would keep its hover highlight indefinitely
+            if (NativeMethods.IsPromotedTouchMessage())
+            {
+                ClearHoverState();
+            }
         }
 
         protected override void OnMouseLeave(EventArgs e)
