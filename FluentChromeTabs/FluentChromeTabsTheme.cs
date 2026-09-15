@@ -1,3 +1,4 @@
+﻿using System;
 using System.Drawing;
 
 namespace FluentChromeTabs
@@ -70,6 +71,41 @@ namespace FluentChromeTabs
         public static bool IsDarkColor(Color color)
         {
             return 0.299 * color.R + 0.587 * color.G + 0.114 * color.B < 128;
+        }
+
+        /// <summary>
+        /// WCAG contrast ratio between two opaque colors, 1.0 (identical) to 21.0
+        /// (black on white). Used to check that a dimmed glyph is still visible against
+        /// its surface, which a fixed blend cannot guarantee once the chrome color is
+        /// user-supplied.
+        /// </summary>
+        public static double ContrastRatio(Color a, Color b)
+        {
+            double la = RelativeLuminance(a);
+            double lb = RelativeLuminance(b);
+
+            if (la < lb)
+            {
+                double swap = la;
+                la = lb;
+                lb = swap;
+            }
+
+            return (la + 0.05) / (lb + 0.05);
+        }
+
+        private static double RelativeLuminance(Color color)
+        {
+            return 0.2126 * LinearizeChannel(color.R)
+                + 0.7152 * LinearizeChannel(color.G)
+                + 0.0722 * LinearizeChannel(color.B);
+        }
+
+        private static double LinearizeChannel(byte value)
+        {
+            double v = value / 255.0;
+
+            return v <= 0.03928 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4);
         }
 
         /// <summary>

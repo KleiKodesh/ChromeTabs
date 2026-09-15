@@ -438,7 +438,19 @@ namespace FluentChromeTabs
                 throw new InvalidOperationException("Tab already belongs to a window. Close it there first.");
             }
 
+            // Same slide as a close, for the same reason and so both read as one behavior:
+            // the existing tabs shuffle aside to make room rather than snapping.
+            Dictionary<FluentTab, int> before = CaptureTabPositions();
+
             AttachTab(index, tab);
+
+            // Slid before the host is told. A TabAdded handler may close tabs or add its own,
+            // and each of those runs its own capture/animate cycle; sliding after them would
+            // measure against a baseline two layout generations old, sending tabs travelling
+            // from positions they never occupied. Whatever the handler does then animates on
+            // its own terms, which is what it would have done had it been called separately.
+            AnimateReflowFrom(before);
+
             TabAdded?.Invoke(this, new FluentTabEventArgs(tab));
             SelectTabCore(_tabs.IndexOf(tab));
 
@@ -461,7 +473,14 @@ namespace FluentChromeTabs
                 return false;
             }
 
+            // Captured before the removal so the surviving tabs can be slid from where they
+            // are now to wherever the reflow puts them.
+            Dictionary<FluentTab, int> before = CaptureTabPositions();
+
             DetachTabCore(tab);
+
+            AnimateReflowFrom(before);
+
             tab.Content?.Dispose();
             TabClosed?.Invoke(this, new FluentTabEventArgs(tab));
 
@@ -525,9 +544,178 @@ namespace FluentChromeTabs
             InvalidateStrip();
         }
 
+        // ── Close reflow animation ───────────────────────────────────────
+        // Closing a tab makes every tab after it jump left by a tab's width. Without a
+        // transition the strip just changes under the pointer and it is genuinely unclear
+        // whether the click closed the intended tab, or landed on its neighbour.
+        //
+        // The layout itself is never animated: TabRect stays authoritative and the new
+        // positions are live immediately, so hit-testing, dragging and scrolling all
+        // behave as if the reflow were instant. Only PAINTING is offset, by a per-tab
+        // delta that decays to zero — so the tabs are drawn sliding from where they were
+        // to where they already are.
+
+        /// <summary>How long the tabs take to slide into their new places.</summary>
+        private const int CloseReflowMs = 130;
+
+        /// <summary>Paint-time X offsets by tab, still travelling back to zero.</summary>
+        private readonly Dictionary<FluentTab, int> _reflowOffsetByTab = new Dictionary<FluentTab, int>();
+
+        /// <summary>The offsets the current slide started from; each frame is eased off these
+        /// rather than off the last frame, so rounding cannot accumulate into a drift.</summary>
+        private readonly Dictionary<FluentTab, int> _reflowStartOffsetByTab = new Dictionary<FluentTab, int>();
+
+        private Timer _reflowTimer;
+        private int _reflowStartTick;
+
+        /// <summary>True while tabs are still sliding, so painting should apply offsets.</summary>
+        private bool ReflowAnimating
+        {
+            get { return _reflowOffsetByTab.Count > 0; }
+        }
+
+        /// <summary>
+        /// Paint offset for a tab mid-slide. Zero for everything else, so a strip that is
+        /// not animating pays nothing and draws exactly where TabRect says.
+        /// </summary>
+        private int ReflowOffsetPx(int index)
+        {
+            int offset;
+            return _reflowOffsetByTab.TryGetValue(_tabs[index], out offset) ? offset : 0;
+        }
+
+        /// <summary>
+        /// Records where each tab is now, to be compared with where it lands once the
+        /// caller has changed the layout. Returns null when nothing would be animated.
+        /// </summary>
+        private Dictionary<FluentTab, int> CaptureTabPositions()
+        {
+            // Animating while dragging would fight the drag for the same pixels, and an
+            // invisible strip has nothing to show.
+            //
+            // IsHandleCreated also gates the whole startup burst: a host adds its tabs in
+            // its constructor, before the window is on screen, and sliding tabs that were
+            // never visible in their old places just delays the first paint.
+            if (!IsHandleCreated || !StripVisible || _dragging || _tabs.Count == 0)
+            {
+                return null;
+            }
+
+            Dictionary<FluentTab, int> before = new Dictionary<FluentTab, int>();
+
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                before[_tabs[i]] = TabRect(i).Left;
+            }
+
+            return before;
+        }
+
+        /// <summary>
+        /// Starts the slide: every surviving tab that moved gets an offset equal to how far
+        /// it moved, which the timer then walks back to zero.
+        /// </summary>
+        private void AnimateReflowFrom(Dictionary<FluentTab, int> before)
+        {
+            // Cleared FIRST, whatever happens next: the entries key on FluentTab objects, so
+            // a slide left behind by a bailed-out call holds those tabs (and their Content)
+            // alive, and keeps easing toward a layout that no longer exists.
+            StopReflowAnimation();
+
+            if (before == null || !StripVisible || _dragging)
+            {
+                return;
+            }
+
+            bool any = false;
+
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                int wasLeft;
+
+                if (!before.TryGetValue(_tabs[i], out wasLeft))
+                {
+                    continue;
+                }
+
+                int shift = wasLeft - TabRect(i).Left;
+
+                if (shift != 0)
+                {
+                    _reflowOffsetByTab[_tabs[i]] = shift;
+                    _reflowStartOffsetByTab[_tabs[i]] = shift;
+                    any = true;
+                }
+            }
+
+            if (!any)
+            {
+                return;
+            }
+
+            // Restarted from zero on every close, so closing several tabs quickly reads as
+            // one continuous motion rather than each slide fighting the last.
+            _reflowStartTick = Environment.TickCount;
+
+            if (_reflowTimer == null)
+            {
+                _reflowTimer = new Timer { Interval = 15 };
+                _reflowTimer.Tick += OnReflowTick;
+            }
+
+            _reflowTimer.Start();
+            InvalidateStrip();
+        }
+
+        private void OnReflowTick(object sender, EventArgs e)
+        {
+            int elapsed = Environment.TickCount - _reflowStartTick;
+
+            if (elapsed >= CloseReflowMs)
+            {
+                StopReflowAnimation();
+                InvalidateStrip();
+                return;
+            }
+
+            // Ease-out cubic: the tabs leave quickly and settle gently, so the eye follows
+            // the movement without the strip feeling sluggish.
+            double t = (double) elapsed / CloseReflowMs;
+            double remaining = 1.0 - t;
+            remaining = remaining * remaining * remaining;
+
+            foreach (FluentTab tab in new List<FluentTab>(_reflowOffsetByTab.Keys))
+            {
+                int start;
+
+                // Looked up rather than indexed: a host handler re-entering CloseTab from a
+                // TabClosed/SelectedTabChanged callback restarts the slide mid-tick, leaving
+                // this snapshot holding keys the start map no longer has.
+                if (_reflowStartOffsetByTab.TryGetValue(tab, out start))
+                {
+                    _reflowOffsetByTab[tab] = (int) Math.Round(start * remaining);
+                }
+            }
+
+            InvalidateStrip();
+        }
+
+        private void StopReflowAnimation()
+        {
+            _reflowTimer?.Stop();
+            _reflowOffsetByTab.Clear();
+            _reflowStartOffsetByTab.Clear();
+        }
+
         /// <summary>Removes a tab from this window without disposing its content (used for closing and for drag transfers).</summary>
         private void DetachTabCore(FluentTab tab)
         {
+            // Drag transfers and window tear-offs come straight here, bypassing the
+            // capture/animate pair in CloseTab. Any slide still running refers to a tab
+            // list that is about to change under it, and its entries would strand this
+            // tab in the offset maps.
+            StopReflowAnimation();
+
             int index = _tabs.IndexOf(tab);
 
             _tabs.RemoveAt(index);
@@ -1900,6 +2088,10 @@ namespace FluentChromeTabs
         {
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
 
+            // Close() does not always dispose straight away (a tear-off defers it through
+            // BeginInvoke), so the slide timer would keep ticking against a torn-down form.
+            StopReflowAnimation();
+
             base.OnHandleDestroyed(e);
         }
 
@@ -1944,6 +2136,7 @@ namespace FluentChromeTabs
             {
                 _toolTip?.Dispose();
                 _windowIconBitmap?.Dispose();
+                _reflowTimer?.Dispose();
             }
 
             base.Dispose(disposing);

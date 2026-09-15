@@ -233,6 +233,11 @@ namespace FluentChromeTabs
 
         private void BeginDrag(Point p)
         {
+            // A slide still running would fight the drag: the dragged tab is painted at the
+            // cursor with no offset while its neighbours are mid-flight, and reordering
+            // re-keys those offsets onto positions they were never measured for.
+            StopReflowAnimation();
+
             // Dragging the only tab of a window drags the whole window, like Chrome
             if (_tabs.Count == 1)
             {

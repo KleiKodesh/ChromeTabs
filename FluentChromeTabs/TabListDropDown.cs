@@ -703,13 +703,46 @@ namespace FluentChromeTabs
             float cy = close.Top + close.Height / 2f;
             float arm = 3.5f * _scale;
 
-            using (Pen pen = new Pen(_palette.TextActive, Math.Max(1f, 1.1f * _scale)))
+            // Muted at rest, full strength under the pointer. At text weight a column of
+            // these reads as a second list competing with the titles, when closing is the
+            // secondary action here — picking a tab is why the list is open.
+            Color glyph = row == _hoverClose
+                ? _palette.TextActive
+                : MutedGlyphColor(_palette.TextActive, _palette.TabActive);
+
+            using (Pen pen = new Pen(glyph, Math.Max(1f, 1.1f * _scale)))
             {
                 pen.StartCap = LineCap.Round;
                 pen.EndCap = LineCap.Round;
                 g.DrawLine(pen, cx - arm, cy - arm, cx + arm, cy + arm);
                 g.DrawLine(pen, cx - arm, cy + arm, cx + arm, cy - arm);
             }
+        }
+
+        /// <summary>
+        /// A dimmed version of <paramref name="text" /> that stays legible on
+        /// <paramref name="surface" />. Muting is backed off as far as it takes to clear a
+        /// 3:1 contrast ratio, because a custom chrome color (see Palette.FromColor) can put
+        /// the surface close enough to the text that ANY fixed blend disappears — a mid-grey
+        /// chrome leaves the full-strength text itself at only ~3:1. Never returns anything
+        /// weaker than <paramref name="text" />, so the glyph can only ever be as hard to see
+        /// as the row's own title.
+        /// </summary>
+        private static Color MutedGlyphColor(Color text, Color surface)
+        {
+            const double MinContrast = 3.0;
+
+            for (double amount = 0.35; amount > 0.001; amount -= 0.05)
+            {
+                Color candidate = Palette.Blend(text, surface, amount);
+
+                if (Palette.ContrastRatio(candidate, surface) >= MinContrast)
+                {
+                    return candidate;
+                }
+            }
+
+            return text;
         }
 
         private Rectangle TextRectFor(Rectangle rowRect)

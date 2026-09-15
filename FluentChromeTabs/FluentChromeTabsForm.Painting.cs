@@ -152,7 +152,16 @@ namespace FluentChromeTabs
                     }
                     if (!_dragging || i != _dragIndex)
                     {
-                        DrawTab(g, i, TabRect(i));
+                        // Offset only the drawing: TabRect already reports the settled
+                        // position, so everything else treats the reflow as instant.
+                        Rectangle rect = TabRect(i);
+
+                        if (ReflowAnimating)
+                        {
+                            rect.X += ReflowOffsetPx(i);
+                        }
+
+                        DrawTab(g, i, rect);
                     }
                 }
 
