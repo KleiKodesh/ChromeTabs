@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
@@ -268,6 +268,28 @@ namespace FluentChromeTabs
 
         /// <summary>Header text of the open-tabs section in the tab-list dropdown.</summary>
         public string TabListOpenTabsHeader { get; set; } = "Open tabs";
+
+        /// <summary>
+        /// Captions for the tab context menu (right-click a tab). English by default;
+        /// set them to localize, as with the caption-button tooltips.
+        /// </summary>
+        public string CloseTabMenuText { get; set; } = "Close tab";
+        public string CloseOtherTabsMenuText { get; set; } = "Close other tabs";
+        public string CloseTabsToTheRightMenuText { get; set; } = "Close tabs to the right";
+
+        /// <summary>
+        /// Shown instead of <see cref="CloseTabsToTheRightMenuText" /> when the strip reads
+        /// right-to-left, where "after this tab" is visually to the LEFT.
+        /// </summary>
+        public string CloseTabsToTheLeftMenuText { get; set; } = "Close tabs to the left";
+
+        /// <summary>
+        /// Raised when a tab is right-clicked, after the built-in close commands have been
+        /// added. Handlers may append their own sections, exactly as with
+        /// <see cref="TabListOpening" />. Set <see cref="TabContextMenuOpeningEventArgs.Cancel" />
+        /// to suppress the menu entirely.
+        /// </summary>
+        public event EventHandler<TabContextMenuOpeningEventArgs> TabContextMenuOpening;
 
         /// <summary>
         /// Optional accent color used for the active-tab indicator in the tab-list dropdown
@@ -698,10 +720,14 @@ namespace FluentChromeTabs
                 FluentTab captured = tab;
                 string listText = !string.IsNullOrEmpty(tab.ListTitle) ? tab.ListTitle
                     : string.IsNullOrEmpty(tab.Title) ? "…" : tab.Title;
+                // The × is the overflow escape hatch: once there are enough tabs that the
+                // strip's own close buttons have shrunk away, this list is where several can
+                // be shed in one visit (the popup stays open across each close).
                 open.Items.Add(new TabListItem(
                     listText,
                     tab == SelectedTab || tab.Highlighted,
-                    () => SelectedTab = captured));
+                    () => SelectedTab = captured,
+                    captured.CanClose ? (Func<bool>) (() => CloseTab(captured)) : null));
             }
 
             if (open.Items.Count > 0)
@@ -751,6 +777,171 @@ namespace FluentChromeTabs
             }
 
             InvalidateStrip();
+        }
+
+        private TabListDropDown _tabContextMenu;
+
+        private bool IsTabContextMenuOpen
+        {
+            get { return _tabContextMenu != null && !_tabContextMenu.IsDisposed && _tabContextMenu.Visible; }
+        }
+
+        /// <summary>
+        /// Opens the right-click menu for <paramref name="tab" /> at <paramref name="clientPoint" />.
+        ///
+        /// Reuses <see cref="TabListDropDown" /> rather than a ContextMenuStrip: the strip is
+        /// entirely owner-drawn from its palette, and a stock menu would be the one piece of
+        /// chrome not following the theme (and not mirroring for RTL).
+        ///
+        /// The bulk commands matter more than the single close here — someone with enough tabs
+        /// open that the × has vanished wants to shed several at once, not click one at a time.
+        /// </summary>
+        public void ShowTabContextMenu(FluentTab tab, Point clientPoint)
+        {
+            if (tab == null || !_tabs.Contains(tab))
+            {
+                return;
+            }
+
+            List<TabListSection> sections = new List<TabListSection>();
+            TabListSection commands = new TabListSection(null);
+
+            FluentTab captured = tab;
+
+            if (tab.CanClose)
+            {
+                commands.Items.Add(new TabListItem(
+                    CloseTabMenuText, false, () => CloseTab(captured)));
+            }
+
+            if (OtherClosableTabs(captured).Count > 0)
+            {
+                commands.Items.Add(new TabListItem(
+                    CloseOtherTabsMenuText, false, () => CloseTabs(OtherClosableTabs(captured))));
+            }
+
+            if (ClosableTabsAfter(captured).Count > 0)
+            {
+                // "Right" is a visual claim, and in a mirrored window the tabs after this one
+                // run leftward — so the caption follows the layout, not the list order.
+                commands.Items.Add(new TabListItem(
+                    IsMirrored || RightToLeft == RightToLeft.Yes
+                        ? CloseTabsToTheLeftMenuText
+                        : CloseTabsToTheRightMenuText,
+                    false,
+                    () => CloseTabs(ClosableTabsAfter(captured))));
+            }
+
+            if (commands.Items.Count > 0)
+            {
+                sections.Add(commands);
+            }
+
+            TabContextMenuOpeningEventArgs args = new TabContextMenuOpeningEventArgs(sections, tab);
+            TabContextMenuOpening?.Invoke(this, args);
+
+            if (args.Cancel)
+            {
+                return;
+            }
+
+            sections.RemoveAll(sec => sec.Items.Count == 0);
+
+            if (sections.Count == 0)
+            {
+                return;
+            }
+
+            // The tab list may be open on the same strip; a second popup on screen would leave
+            // whichever loses focus painted as still-open.
+            if (IsTabListOpen)
+            {
+                _tabListDropDown.Close();
+            }
+
+            if (IsTabContextMenuOpen)
+            {
+                _tabContextMenu.Close();
+            }
+
+            TabListDropDown menu = new TabListDropDown(this, sections);
+            _tabContextMenu = menu;
+
+            // Deliberately NOT stored in _tabListDropDown/_tabListOpenGroup: those drive the
+            // tab-list toggle's pressed state and its reopen guard, and a context menu must
+            // not make that button look held down.
+            menu.FormClosed += (s, e) =>
+            {
+                _tabContextMenu = null;
+                BeginInvoke(new Action(menu.Dispose));
+            };
+
+            Point anchor = PointToScreen(clientPoint);
+            Rectangle workArea = Screen.FromControl(this).WorkingArea;
+
+            // Menus open away from the pointer along the reading direction, so a mirrored
+            // window hangs the menu to the pointer's left.
+            int x = IsMirrored ? anchor.X - menu.Width : anchor.X;
+            x = Math.Max(workArea.Left, Math.Min(x, workArea.Right - menu.Width));
+            int y = Math.Min(anchor.Y, workArea.Bottom - menu.Height);
+
+            menu.Location = new Point(x, y);
+            menu.Show(this);
+        }
+
+        /// <summary>Every closable tab in <paramref name="tab" />'s group except itself.</summary>
+        private List<FluentTab> OtherClosableTabs(FluentTab tab)
+        {
+            List<FluentTab> result = new List<FluentTab>();
+
+            foreach (FluentTab candidate in _tabs)
+            {
+                if (candidate != tab && candidate.CanClose && SameMenuScope(candidate, tab))
+                {
+                    result.Add(candidate);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>Closable tabs positioned after <paramref name="tab" /> in its group.</summary>
+        private List<FluentTab> ClosableTabsAfter(FluentTab tab)
+        {
+            List<FluentTab> result = new List<FluentTab>();
+            int from = _tabs.IndexOf(tab);
+
+            for (int i = from + 1; i < _tabs.Count; i++)
+            {
+                if (_tabs[i].CanClose && SameMenuScope(_tabs[i], tab))
+                {
+                    result.Add(_tabs[i]);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// A split strip's two regions are separate tab strips to the user, so a bulk close
+        /// started in one must not reach across and empty the other.
+        /// </summary>
+        private bool SameMenuScope(FluentTab a, FluentTab b)
+        {
+            return !_splitStrip || GroupOf(a) == GroupOf(b);
+        }
+
+        /// <summary>
+        /// Closes a pre-resolved set of tabs. The list is snapshotted by the caller because
+        /// <see cref="CloseTab" /> mutates <c>_tabs</c>, and a TabClosing handler may cancel
+        /// any one of them — so this iterates the snapshot and lets refusals stand.
+        /// </summary>
+        private void CloseTabs(List<FluentTab> tabs)
+        {
+            foreach (FluentTab tab in tabs)
+            {
+                CloseTab(tab);
+            }
         }
 
         #endregion
@@ -1297,18 +1488,47 @@ namespace FluentChromeTabs
             }
 
             int width = TabWidthPx(GroupOf(_tabs[index]));
+            bool active = index == _selectedIndex || _tabs[index].Highlighted;
 
             // The close button is anchored to the right edge and the favicon to the
-            // left, so on a narrow tab they collide — the × ends up drawn on top of
-            // the icon. The icon wins: it identifies the tab, while the close is also
-            // available from the context menu and Ctrl+W. Below the threshold the
-            // active tab simply shows no ×.
-            if (_tabs[index].Icon != null && width < MinTabWidthWithClosePx)
+            // left, so on a narrow tab they collide — the × would be drawn on top of
+            // the icon. Only one of the two can be kept.
+            //
+            // On an INACTIVE tab the icon wins: it identifies the tab, and the tab has
+            // to be selected before it can be closed anyway.
+            //
+            // On the ACTIVE tab the × wins instead (TabShowsIcon drops the favicon to
+            // make room). With many tabs open every tab is at MinTabWidthPx, and if the
+            // active tab dropped its × too there would be no close button anywhere on
+            // the strip — leaving only Ctrl+W and middle-click, neither of which is
+            // discoverable by a user reaching for an ×. Keeping it on the active tab
+            // means repeated clicking walks through the tabs, which is exactly the
+            // gesture wanted when the strip is overfull. Chrome behaves the same way.
+            if (!active && _tabs[index].Icon != null && width < MinTabWidthWithClosePx)
             {
                 return false;
             }
 
-            return index == _selectedIndex || _tabs[index].Highlighted || width >= Dpi(72);
+            return active || width >= Dpi(72);
+        }
+
+        /// <summary>
+        /// Whether the tab draws its favicon. Dropped only on the active tab when it is too
+        /// narrow to show icon and × together — see <see cref="TabShowsClose" /> for why the
+        /// × is the one that survives there.
+        /// </summary>
+        private bool TabShowsIcon(int index)
+        {
+            if (_tabs[index].Icon == null)
+            {
+                return false;
+            }
+
+            bool active = index == _selectedIndex || _tabs[index].Highlighted;
+
+            return !(active
+                && TabShowsClose(index)
+                && TabWidthPx(GroupOf(_tabs[index])) < MinTabWidthWithClosePx);
         }
 
         private Rectangle NewTabButtonRect(int group)

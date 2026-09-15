@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -105,6 +105,20 @@ namespace FluentChromeTabs
             else if (e.Button == MouseButtons.Middle && tab >= 0 && _tabs[tab].CanClose)
             {
                 CloseTab(_tabs[tab]);
+            }
+            else if (e.Button == MouseButtons.Right && tab >= 0)
+            {
+                FluentTab target = _tabs[tab];
+
+                // Select first, as browsers do: the menu's commands are phrased around "this
+                // tab", so the tab it will act on has to be the one visibly active.
+                SelectTabCore(tab);
+
+                // Anchor to the tab, not to the click: selecting an off-screen tab in an
+                // overflowing group scrolls it into view, moving every tab out from under
+                // the recorded pointer position.
+                Rectangle rect = TabRect(_tabs.IndexOf(target));
+                ShowTabContextMenu(target, new Point(rect.Left, StripHeightPx - Dpi(2)));
             }
         }
 

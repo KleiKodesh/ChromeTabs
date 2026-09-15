@@ -31,6 +31,9 @@ animations all stay perfectly smooth. One window, no chasing, no flicker.
   cycle, `Ctrl+1`–`Ctrl+9` select
 - 📌 **Pinnable tabs** (`CanClose = false`), per-tab icons, tooltips for truncated titles,
   middle-click close
+- ❌ **Close never goes out of reach**: tabs shrink and then scroll as they pile up, and the
+  active tab keeps its × (dropping its icon) even at minimum width. Right-click a tab for
+  close / close others / close to the right, or use the × on each row of the tab list
 - 🖥 **Per-monitor V2 DPI** support
 - 🌍 **Full RTL / Hebrew support** — set the standard `RightToLeft = Yes` and
   `RightToLeftLayout = true` and the whole chrome mirrors: tabs flow from the right, caption
@@ -142,11 +145,13 @@ public class MainWindow : FluentChromeTabsForm
 | `AddTab(title, control)` / `AddTab(title)` / `AddTab(tab)` / `InsertTab(index, tab)` | Add tabs (title-only = loose mode); returns the `FluentTab` |
 | `CloseTab(tab)` | Close programmatically (raises `TabClosing` first) |
 | `RequestNewTab()` | Same as the user pressing "+" |
+| `ShowTabContextMenu(tab, point)` | Open a tab's right-click menu programmatically |
 | `Tabs`, `SelectedTab`, `SelectedIndex` | Enumerate and select |
 | `Theme` (`Auto` / `Light` / `Dark`), `IsDarkTheme` | Theming |
 | `CustomThemeColor` | Any `Color` as the chrome color; full palette derived from its brightness. Null returns to `Theme` |
 | `ContentBackColor`, `ContentForeColor` | Suggested colors so your content matches the chrome |
 | `ShowNewTabButton`, `AllowTabDetach`, `ExitOnLastTabClose` | Behavior switches |
+| `CloseTabMenuText`, `CloseOtherTabsMenuText`, `CloseTabsToTheRightMenuText`, `CloseTabsToTheLeftMenuText` | Context-menu captions, for localizing (the "left" variant is used when the strip is RTL) |
 
 ### Events
 
@@ -157,6 +162,7 @@ public class MainWindow : FluentChromeTabsForm
 | `TabClosing` | Before a close; cancelable |
 | `SelectedTabChanged` | Selection changed |
 | `ThemeChanged` | Effective theme changed (including Windows switching in Auto mode) |
+| `TabContextMenuOpening` | A tab was right-clicked; append your own `Sections`, or `Cancel` |
 
 ### `FluentTab`
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -257,7 +257,7 @@ namespace FluentChromeTabs
 
             int textLeft = rect.Left + Dpi(10);
 
-            if (tab.Icon != null)
+            if (TabShowsIcon(index))
             {
                 int iconSize = Dpi(16);
                 Rectangle iconRect = new Rectangle(textLeft, rect.Top + (rect.Height - iconSize) / 2, iconSize, iconSize);

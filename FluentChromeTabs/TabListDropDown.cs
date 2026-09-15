@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -10,10 +10,16 @@ namespace FluentChromeTabs
     public class TabListItem
     {
         public TabListItem(string text, bool active, Action activate)
+            : this(text, active, activate, null)
+        {
+        }
+
+        public TabListItem(string text, bool active, Action activate, Func<bool> close)
         {
             Text = text ?? string.Empty;
             Active = active;
             Activate = activate;
+            Close = close;
         }
 
         /// <summary>Display text.</summary>
@@ -24,6 +30,16 @@ namespace FluentChromeTabs
 
         /// <summary>Invoked when the row is clicked, right after the dropdown closes.</summary>
         public Action Activate { get; }
+
+        /// <summary>
+        /// Optional close action. When set the row draws a × on its inline-end edge, and
+        /// clicking that × runs this instead of <see cref="Activate" />. Rows without one
+        /// (a "recently closed" entry, say) draw no button.
+        ///
+        /// Returns whether the close actually happened: a TabClosing handler may cancel it
+        /// (an unsaved document, say), and the row must stay in the list when it does.
+        /// </summary>
+        public Func<bool> Close { get; }
     }
 
     /// <summary>A headed group of rows in the tab-list dropdown.</summary>
@@ -55,6 +71,27 @@ namespace FluentChromeTabs
 
         /// <summary>Which split region's toggle opened the popup (always 0 when the strip is not split).</summary>
         public int Group { get; }
+    }
+
+    /// <summary>
+    /// Raised when a tab is right-clicked, before its context menu opens. The built-in close
+    /// commands are pre-populated; handlers may append sections or cancel the menu outright.
+    /// </summary>
+    public class TabContextMenuOpeningEventArgs : EventArgs
+    {
+        public TabContextMenuOpeningEventArgs(List<TabListSection> sections, FluentTab tab)
+        {
+            Sections = sections;
+            Tab = tab;
+        }
+
+        public List<TabListSection> Sections { get; }
+
+        /// <summary>The tab that was right-clicked.</summary>
+        public FluentTab Tab { get; }
+
+        /// <summary>Set to suppress the menu.</summary>
+        public bool Cancel { get; set; }
     }
 
     /// <summary>
@@ -100,6 +137,9 @@ namespace FluentChromeTabs
         private ThemedToolTip _toolTip;
         private Font _headerFont;
         private int _hoverRow = -1;
+        // Row whose × the pointer is over (-1 = none); the button only paints its
+        // hover plate when actually aimed at, as on the tabs themselves.
+        private int _hoverClose = -1;
         private int _focusRow = -1;
         private int _scrollY;
         private string _toolTipShownFor;
@@ -306,7 +346,7 @@ namespace FluentChromeTabs
             // OnDeactivate must not re-enter this and activate a second time.
             _quickSwitch = false;
 
-            if (_focusRow >= 0 && _rows[_focusRow].Kind == RowKindItem)
+            if (IsFocusRowActivatable)
             {
                 ActivateRow(_focusRow);
             }
@@ -369,7 +409,7 @@ namespace FluentChromeTabs
 
                 case Keys.Enter:
                 case Keys.Space:
-                    if (_focusRow >= 0 && _rows[_focusRow].Kind == RowKindItem)
+                    if (IsFocusRowActivatable)
                     {
                         ActivateRow(_focusRow);
                     }
@@ -471,7 +511,10 @@ namespace FluentChromeTabs
                 if (row.Text != null)
                 {
                     Font font = row.Kind == RowKindHeader ? _headerFont : Font;
-                    width = Math.Max(width, TextRenderer.MeasureText(row.Text, font).Width + S(56));
+                    // Rows carrying a × need its slot on top of the usual padding, or adding
+                    // the button would truncate titles that used to fit.
+                    int extra = row.Item != null && row.Item.Close != null ? CloseSizePx + S(6) : 0;
+                    width = Math.Max(width, TextRenderer.MeasureText(row.Text, font).Width + S(56) + extra);
                 }
             }
 
@@ -624,7 +667,12 @@ namespace FluentChromeTabs
                     }
                 }
 
-                TextRenderer.DrawText(g, row.Text, Font, TextRectFor(rect), _palette.TextActive, flags);
+                TextRenderer.DrawText(g, row.Text, Font, TextRectFor(i), _palette.TextActive, flags);
+
+                if (RowShowsClose(i))
+                {
+                    DrawRowClose(g, i);
+                }
             }
 
             // Hairline border so the popup reads as a surface over same-colored content
@@ -634,9 +682,91 @@ namespace FluentChromeTabs
             }
         }
 
+        /// <summary>
+        /// The row's ×. Drawn as vector strokes with the same geometry as the tab close
+        /// button, so the two read as the same control in two places.
+        /// </summary>
+        private void DrawRowClose(Graphics g, int row)
+        {
+            Rectangle close = CloseRectFor(row);
+
+            if (row == _hoverClose)
+            {
+                using (SolidBrush brush = new SolidBrush(Palette.Blend(_palette.TabActive, _palette.TextActive, 0.12)))
+                using (GraphicsPath path = RoundedRect(close, S(4)))
+                {
+                    g.FillPath(brush, path);
+                }
+            }
+
+            float cx = close.Left + close.Width / 2f;
+            float cy = close.Top + close.Height / 2f;
+            float arm = 3.5f * _scale;
+
+            using (Pen pen = new Pen(_palette.TextActive, Math.Max(1f, 1.1f * _scale)))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                g.DrawLine(pen, cx - arm, cy - arm, cx + arm, cy + arm);
+                g.DrawLine(pen, cx - arm, cy + arm, cx + arm, cy - arm);
+            }
+        }
+
         private Rectangle TextRectFor(Rectangle rowRect)
         {
             return InsetInline(rowRect, S(16), S(12));
+        }
+
+        /// <summary>Text rect for a row, less the × slot when that row shows one.</summary>
+        private Rectangle TextRectFor(int row)
+        {
+            Rectangle rect = TextRectFor(RowRect(row));
+
+            return RowShowsClose(row)
+                ? InsetInline(rect, 0, CloseSizePx + S(6))
+                : rect;
+        }
+
+        private int CloseSizePx
+        {
+            get { return S(16); }
+        }
+
+        private bool RowShowsClose(int row)
+        {
+            return row >= 0
+                && row < _rows.Count
+                && _rows[row].Kind == RowKindItem
+                && _rows[row].Item != null
+                && _rows[row].Item.Close != null;
+        }
+
+        /// <summary>The × slot on a row's inline-end edge (visual left in RTL).</summary>
+        private Rectangle CloseRectFor(int row)
+        {
+            Rectangle rect = RowRect(row);
+            int size = CloseSizePx;
+            int x = _rtl ? rect.Left + S(8) : rect.Right - size - S(8);
+
+            return new Rectangle(x, rect.Top + (rect.Height - size) / 2, size, size);
+        }
+
+        /// <summary>
+        /// Whether <see cref="_focusRow" /> still names an activatable row. The upper bound
+        /// matters: closing a row prunes headers and separators too, so the focus index can
+        /// end up past the end of a list that got shorter than expected.
+        /// </summary>
+        private bool IsFocusRowActivatable
+        {
+            get { return _focusRow >= 0 && _focusRow < _rows.Count && _rows[_focusRow].Kind == RowKindItem; }
+        }
+
+        /// <summary>Row whose × is under <paramref name="p" />, or -1.</summary>
+        private int HitClose(Point p)
+        {
+            int row = HitRow(p);
+
+            return RowShowsClose(row) && CloseRectFor(row).Contains(p) ? row : -1;
         }
 
         /// <summary>Insets a rectangle by start/end amounts along the reading direction.</summary>
@@ -685,6 +815,7 @@ namespace FluentChromeTabs
                     // The finger is panning, not aiming — hover highlight and tooltip come off
                     _panning = true;
                     _hoverRow = -1;
+                    _hoverClose = -1;
                     UpdateToolTip(-1);
                     Invalidate();
                 }
@@ -694,10 +825,12 @@ namespace FluentChromeTabs
             }
 
             int row = HitRow(e.Location);
+            int close = HitClose(e.Location);
 
-            if (row != _hoverRow)
+            if (row != _hoverRow || close != _hoverClose)
             {
                 _hoverRow = row;
+                _hoverClose = close;
                 Cursor = row >= 0 ? Cursors.Hand : Cursors.Default;
                 Invalidate();
                 UpdateToolTip(row);
@@ -711,10 +844,11 @@ namespace FluentChromeTabs
 
             if (row >= 0)
             {
-                Rectangle rect = RowRect(row);
                 string text = _rows[row].Text;
 
-                if (TextRenderer.MeasureText(text, Font).Width > TextRectFor(rect).Width)
+                // Measured against the close-aware rect: on a row with a × the text box is
+                // narrower, so a title can be truncated there that would have fit without it.
+                if (TextRenderer.MeasureText(text, Font).Width > TextRectFor(row).Width)
                 {
                     tip = text;
                 }
@@ -731,7 +865,7 @@ namespace FluentChromeTabs
                         _toolTip = new ThemedToolTip(Font, _scale);
                     }
 
-                    Rectangle textRect = TextRectFor(RowRect(row));
+                    Rectangle textRect = TextRectFor(row);
                     Point start = PointToScreen(new Point(_rtl ? textRect.Right : textRect.Left, RowRect(row).Bottom + S(2)));
                     _toolTip.ShowText(tip, _palette, _rtl, start.X, start.Y);
                 }
@@ -746,9 +880,10 @@ namespace FluentChromeTabs
         {
             base.OnMouseLeave(e);
 
-            if (_hoverRow != -1)
+            if (_hoverRow != -1 || _hoverClose != -1)
             {
                 _hoverRow = -1;
+                _hoverClose = -1;
                 Invalidate();
                 UpdateToolTip(-1);
             }
@@ -774,11 +909,129 @@ namespace FluentChromeTabs
                 return;
             }
 
+            int closeRow = HitClose(e.Location);
+
+            if (closeRow >= 0)
+            {
+                CloseRow(closeRow);
+                return;
+            }
+
             int row = HitRow(e.Location);
 
             if (row >= 0)
             {
                 ActivateRow(row);
+            }
+        }
+
+        /// <summary>
+        /// Runs a row's close action and drops the row, leaving the popup open — shedding
+        /// several tabs is the reason to be in this list, and closing after each one would
+        /// mean reopening the popup for every tab.
+        /// </summary>
+        private void CloseRow(int row)
+        {
+            Func<bool> close = _rows[row].Item.Close;
+
+            // Run the close FIRST and drop the row only if it actually happened: a TabClosing
+            // handler may cancel (an unsaved document), and a row removed ahead of that would
+            // vanish from the list while its tab lived on.
+            if (close != null && !close())
+            {
+                return;
+            }
+
+            // The host's TabClosed handler may have closed this popup, or rebuilt it; once
+            // that has happened the row list below is no longer ours to touch.
+            if (IsDisposed || Disposing || !Visible)
+            {
+                return;
+            }
+
+            // Re-find the row rather than trusting the index: the callback above ran arbitrary
+            // host code, which may have closed further tabs and renumbered the list.
+            if (row >= _rows.Count || _rows[row].Item == null || _rows[row].Item.Close != close)
+            {
+                return;
+            }
+
+            _rows.RemoveAt(row);
+            DropOrphanedChrome();
+
+            // Clamped AFTER the pruning above, which removes further rows: clamping first
+            // leaves _focusRow past the end, and the Enter/Space handler indexes it unguarded.
+            _hoverRow = -1;
+            _hoverClose = -1;
+            _focusRow = Math.Min(_focusRow, _rows.Count - 1);
+            _toolTipShownFor = null;
+            _toolTip?.HideTip();
+
+            if (_rows.Count == 0)
+            {
+                Close();
+                return;
+            }
+
+            // The list got shorter, so the popup shrinks with it and the scroll offset may
+            // now point past the end.
+            ClientSize = MeasureContent();
+            ScrollTo(_scrollY);
+            Invalidate();
+        }
+
+        /// <summary>
+        /// Removes chrome left dangling by a closed row: a header whose section has emptied,
+        /// and separators that no longer sit between two runs of real content.
+        ///
+        /// Headers are dropped FIRST — an emptied section's leftover header would otherwise
+        /// still count as content and keep its separator alive.
+        /// </summary>
+        private void DropOrphanedChrome()
+        {
+            // A header owns the rows up to the next header or separator. Checking only the
+            // immediately-following row would keep a header whose own section emptied, and it
+            // would then silently relabel the NEXT section's items.
+            for (int i = _rows.Count - 1; i >= 0; i--)
+            {
+                if (_rows[i].Kind != RowKindHeader)
+                {
+                    continue;
+                }
+
+                bool hasItems = false;
+
+                for (int j = i + 1;
+                     j < _rows.Count && _rows[j].Kind != RowKindHeader && _rows[j].Kind != RowKindSeparator;
+                     j++)
+                {
+                    hasItems |= _rows[j].Kind == RowKindItem;
+                }
+
+                if (!hasItems)
+                {
+                    _rows.RemoveAt(i);
+                }
+            }
+
+            // A separator is only earned between two runs of content. Testing the NEAREST
+            // neighbours (rather than "any item anywhere on that side") is what stops two
+            // adjacent separators from each seeing content past the other and both surviving
+            // as one double-height gap.
+            for (int i = _rows.Count - 1; i >= 0; i--)
+            {
+                if (_rows[i].Kind != RowKindSeparator)
+                {
+                    continue;
+                }
+
+                bool contentBefore = i > 0 && _rows[i - 1].Kind != RowKindSeparator;
+                bool contentAfter = i + 1 < _rows.Count && _rows[i + 1].Kind != RowKindSeparator;
+
+                if (!contentBefore || !contentAfter)
+                {
+                    _rows.RemoveAt(i);
+                }
             }
         }
 
