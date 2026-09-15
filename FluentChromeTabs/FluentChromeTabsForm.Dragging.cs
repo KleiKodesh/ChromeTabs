@@ -108,17 +108,11 @@ namespace FluentChromeTabs
             }
             else if (e.Button == MouseButtons.Right && tab >= 0)
             {
-                FluentTab target = _tabs[tab];
-
-                // Select first, as browsers do: the menu's commands are phrased around "this
-                // tab", so the tab it will act on has to be the one visibly active.
-                SelectTabCore(tab);
-
-                // Anchor to the tab, not to the click: selecting an off-screen tab in an
-                // overflowing group scrolls it into view, moving every tab out from under
-                // the recorded pointer position.
-                Rectangle rect = TabRect(_tabs.IndexOf(target));
-                ShowTabContextMenu(target, new Point(rect.Left, StripHeightPx - Dpi(2)));
+                // Deliberately does NOT select the tab: right-clicking is asking about a
+                // tab, not switching to it, and stealing the selection would swap the
+                // user's content out from under them just to read a menu. The menu
+                // targets the clicked tab regardless of what is selected.
+                ShowTabContextMenu(_tabs[tab], e.Location);
             }
         }
 

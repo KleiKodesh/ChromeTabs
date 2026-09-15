@@ -751,6 +751,19 @@ namespace FluentChromeTabs
                 return;
             }
 
+            // A header earns its row only by telling one section from another. When the open
+            // tabs are the whole popup it just restates what the list obviously is, so it is
+            // dropped; a host that appended its own section (recently closed, say) keeps it,
+            // because then the heading is what separates the two.
+            if (sections.Count == 1 && sections[0] == open)
+            {
+                TabListSection unheaded = new TabListSection(null);
+                unheaded.Items.AddRange(open.Items);
+                sections[0] = unheaded;
+            }
+
+            HideStripToolTip();
+
             TabListDropDown drop = new TabListDropDown(this, sections);
             _tabListDropDown = drop;
             _tabListOpenGroup = group;
@@ -761,6 +774,11 @@ namespace FluentChromeTabs
                 _tabListDropDown = null;
                 _tabListOpenGroup = -1;
                 InvalidateStrip();
+
+                // Suppressed tooltips were skipped while the popup was up, and the pointer
+                // may be resting on an item without moving again — re-derive from the hover
+                // state that is already current, or that item stays silent.
+                UpdateToolTip();
                 BeginInvoke(new Action(drop.Dispose));
             };
 
@@ -871,6 +889,10 @@ namespace FluentChromeTabs
                 _tabContextMenu.Close();
             }
 
+            // The hover tooltip for this very tab is on screen; leaving it up would float
+            // over the menu that is about to open on top of it.
+            HideStripToolTip();
+
             TabListDropDown menu = new TabListDropDown(this, sections);
             _tabContextMenu = menu;
 
@@ -880,6 +902,7 @@ namespace FluentChromeTabs
             menu.FormClosed += (s, e) =>
             {
                 _tabContextMenu = null;
+                UpdateToolTip();
                 BeginInvoke(new Action(menu.Dispose));
             };
 
@@ -1554,6 +1577,14 @@ namespace FluentChromeTabs
 
         private void SetScrollOffsetPx(int group, int value)
         {
+            // Declined while the strip has no width (minimized, or before the handle is
+            // first sized): the clamp below measures live geometry, so such a write would
+            // collapse to 0 and persist, discarding where the user had scrolled to.
+            if (GroupTabsClipRect(group).Width <= 0)
+            {
+                return;
+            }
+
             int clamped = Math.Max(0, Math.Min(value, MaxScrollOffsetPx(group)));
             if (ScrollOffsetPx(group) == clamped)
             {
@@ -1586,7 +1617,13 @@ namespace FluentChromeTabs
             int width = TabWidthPx(index, group);
             int tabLeft = TabOffsetPx(index, group);
             int offset = ScrollOffsetPx(group);
-            int visible = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
+
+            // The band the tabs actually occupy, not the whole region: while the group
+            // overflows, a chevron covers each end. Measuring against the region would
+            // scroll the tab flush to that edge, parking it underneath the chevron —
+            // technically "visible" by the arithmetic, hidden on screen. MaxScrollOffsetPx
+            // already measures the same inset band.
+            int visible = GroupTabsClipRect(group).Width;
 
             if (tabLeft < offset)
             {
@@ -1779,6 +1816,56 @@ namespace FluentChromeTabs
 
         /// <summary>Raised after any <see cref="FluentChromeTabsForm" /> in the process closes. Used by <see cref="FluentChromeTabsApplicationContext" />.</summary>
         public static event EventHandler WindowClosed;
+
+        /// <summary>Client width the strip last laid out for, so a resize that did not change
+        /// the width (restoring from minimized, a height-only drag) is ignored.</summary>
+        private int _lastStripLayoutWidth = -1;
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+
+            // Narrowing the window shrinks the tabs and shortens the scrollable band, which
+            // can leave the active tab parked outside it — the user drags the edge in and
+            // the tab they are working in slides away behind a chevron. Pull it back.
+            //
+            // Every active tab, not just the selected one: a split strip shows one per
+            // region, and the unselected region's tab drifts out of view just the same.
+            //
+            // Skipped whenever the size on show is not one the user chose:
+            //  - minimizing raises OnResize with a 0x0 client area, where the visible band
+            //    measures 0, every tab reads as out of view, and the offset is rewritten to
+            //    0 — silently discarding where the user had scrolled to;
+            //  - restoring passes through a stray intermediate WM_SIZE before the bounds
+            //    correction in WndProc puts the window back (see _restoreFixPending), and
+            //    acting on that transient geometry rewrites the offset just the same.
+            if (!StripVisible
+                || WindowState == FormWindowState.Minimized
+                || ClientSize.Width <= 0
+                || _restoreFixPending)
+            {
+                return;
+            }
+
+            // Only a WIDTH change can push a tab out of the band. Restoring from minimized
+            // replays the old width through a transient layout, and reacting to that would
+            // re-scroll the strip to wherever the active tab happens to be — discarding the
+            // position the user had scrolled to for a size they never actually changed.
+            if (ClientSize.Width == _lastStripLayoutWidth)
+            {
+                return;
+            }
+
+            _lastStripLayoutWidth = ClientSize.Width;
+
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                if (IsActiveTab(i))
+                {
+                    EnsureTabVisible(i);
+                }
+            }
+        }
 
         protected override void OnHandleCreated(EventArgs e)
         {

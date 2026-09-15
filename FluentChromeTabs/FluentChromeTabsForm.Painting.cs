@@ -671,6 +671,14 @@ namespace FluentChromeTabs
         /// </summary>
         private void ShowStripToolTip(object key, string text, Rectangle anchorClientRect)
         {
+            // A popup covering the strip owns the screen there; a tooltip would sit on top
+            // of the very menu the user opened over that tab.
+            if (IsTabContextMenuOpen || IsTabListOpen)
+            {
+                HideStripToolTip();
+                return;
+            }
+
             if (Equals(key, _toolTipKey))
             {
                 return;
@@ -695,6 +703,14 @@ namespace FluentChromeTabs
             int stripBottomScreen = RectangleToScreen(new Rectangle(0, 0, 1, StripHeightPx)).Bottom;
             int startX = IsMirrored ? itemScreen.Right : itemScreen.Left;
             _toolTip.ShowText(text, _palette, IsMirrored, startX, stripBottomScreen + Dpi(4));
+        }
+
+        /// <summary>Takes the strip tooltip down and forgets what it described, so the next
+        /// hover over the same item shows it again rather than being deduped away.</summary>
+        private void HideStripToolTip()
+        {
+            _toolTipKey = null;
+            _toolTip?.HideTip();
         }
     }
 }
