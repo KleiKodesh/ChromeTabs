@@ -120,6 +120,9 @@ namespace FluentChromeTabs
         private const int RowKindItem = 1;
         private const int RowKindSeparator = 2;
 
+        /// <summary>Contrast floor for the row × at rest — see <see cref="MutedGlyphColor" />.</summary>
+        private const double MinGlyphContrast = 3.0;
+
         private const int CS_DROPSHADOW = 0x00020000;
 
         private struct Row
@@ -458,10 +461,21 @@ namespace FluentChromeTabs
 
         private void SetFocusRow(int index)
         {
+            // Only reached from the key handlers and quick-switch, so this is the point at
+            // which the focus row becomes a real keyboard position rather than the initial
+            // highlight on the active tab.
+            _keyboardDrivingFocus = true;
             _focusRow = index;
             EnsureRowVisible(index);
             Invalidate();
         }
+
+        /// <summary>
+        /// Whether the focus row reflects deliberate keyboard navigation. It starts on the
+        /// active tab's row for every popup, so without this the × would appear on that row
+        /// even when the user has only ever touched the mouse.
+        /// </summary>
+        private bool _keyboardDrivingFocus;
 
         // ── Layout ──────────────────────────────────────────────────────────────────
 
@@ -720,17 +734,20 @@ namespace FluentChromeTabs
         }
 
         /// <summary>
-        /// A dimmed version of <paramref name="text" /> that stays legible on
-        /// <paramref name="surface" />. Muting is backed off as far as it takes to clear a
-        /// 3:1 contrast ratio, because a custom chrome color (see Palette.FromColor) can put
-        /// the surface close enough to the text that ANY fixed blend disappears — a mid-grey
-        /// chrome leaves the full-strength text itself at only ~3:1. Never returns anything
-        /// weaker than <paramref name="text" />, so the glyph can only ever be as hard to see
-        /// as the row's own title.
+        /// A slightly dimmed version of <paramref name="text" /> for the row's ×, going to
+        /// full strength under the pointer. Only the hovered row shows a × at all, so this
+        /// no longer has to fight a whole column of them — it just keeps the glyph from
+        /// outweighing the title on the one row it appears on.
+        ///
+        /// Muting is backed off as far as it takes to clear <see cref="MinGlyphContrast" />,
+        /// because a custom chrome color (see Palette.FromColor) can put the surface close
+        /// enough to the text that any fixed blend disappears entirely. Never returns
+        /// anything weaker than <paramref name="text" />, so the glyph is at worst exactly
+        /// as visible as the row's own title.
         /// </summary>
         private static Color MutedGlyphColor(Color text, Color surface)
         {
-            const double MinContrast = 3.0;
+            const double MinContrast = MinGlyphContrast;
 
             for (double amount = 0.35; amount > 0.001; amount -= 0.05)
             {
@@ -755,7 +772,9 @@ namespace FluentChromeTabs
         {
             Rectangle rect = TextRectFor(RowRect(row));
 
-            return RowShowsClose(row)
+            // Reserved on every closable row, not just the one showing its ×: otherwise a
+            // long title would re-wrap and shift as the pointer moves onto the row.
+            return RowCanClose(row)
                 ? InsetInline(rect, 0, CloseSizePx + S(6))
                 : rect;
         }
@@ -765,7 +784,20 @@ namespace FluentChromeTabs
             get { return S(16); }
         }
 
+        /// <summary>
+        /// Whether the row currently draws its ×. Only the row under the pointer does (or the
+        /// keyboard's focus row, so the list stays usable without a mouse): a column of ×s
+        /// down every row competes with the titles for attention, when picking a tab is why
+        /// the list is open and closing is the secondary action.
+        /// </summary>
         private bool RowShowsClose(int row)
+        {
+            return RowCanClose(row)
+                && (row == _hoverRow || (_keyboardDrivingFocus && row == _focusRow));
+        }
+
+        /// <summary>Whether the row HAS a close action, regardless of whether it is showing.</summary>
+        private bool RowCanClose(int row)
         {
             return row >= 0
                 && row < _rows.Count
@@ -862,6 +894,13 @@ namespace FluentChromeTabs
 
             if (row != _hoverRow || close != _hoverClose)
             {
+                // The pointer takes over: a × left showing on the keyboard's row would
+                // otherwise sit there alongside the one under the cursor.
+                if (row >= 0)
+                {
+                    _keyboardDrivingFocus = false;
+                }
+
                 _hoverRow = row;
                 _hoverClose = close;
                 Cursor = row >= 0 ? Cursors.Hand : Cursors.Default;

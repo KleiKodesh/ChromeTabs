@@ -278,8 +278,9 @@ namespace FluentChromeTabs
         public string CloseTabsToTheRightMenuText { get; set; } = "Close tabs to the right";
 
         /// <summary>
-        /// Shown instead of <see cref="CloseTabsToTheRightMenuText" /> when the strip reads
-        /// right-to-left, where "after this tab" is visually to the LEFT.
+        /// Both directions are offered. Which list each caption labels depends on the layout:
+        /// in a right-to-left strip the tabs AFTER the clicked one are the visual left, and
+        /// the ones before it are the visual right.
         /// </summary>
         public string CloseTabsToTheLeftMenuText { get; set; } = "Close tabs to the left";
 
@@ -557,6 +558,125 @@ namespace FluentChromeTabs
 
         /// <summary>How long the tabs take to slide into their new places.</summary>
         private const int CloseReflowMs = 130;
+
+        /// <summary>
+        /// How long a scroll takes to catch up visually. Shorter than a reflow: scrolling is
+        /// often repeated (wheel notches, held chevron), and a longer glide would lag behind
+        /// the input instead of following it.
+        /// </summary>
+        private const int ScrollGlideMs = 110;
+
+        /// <summary>Per-group paint offsets for the scroll still catching up, in pixels.</summary>
+        private readonly Dictionary<int, int> _scrollGlideByGroup = new Dictionary<int, int>();
+        private readonly Dictionary<int, int> _scrollGlideStartByGroup = new Dictionary<int, int>();
+
+        /// <summary>
+        /// Start time PER GROUP. A split strip's two regions scroll independently, and a
+        /// single shared tick would have a second group's scroll restart the first group's
+        /// easing from its original amplitude — springing that band backwards mid-flight and
+        /// extending it for as long as the other kept scrolling.
+        /// </summary>
+        private readonly Dictionary<int, int> _scrollGlideTickByGroup = new Dictionary<int, int>();
+
+        private bool ScrollGliding
+        {
+            get { return _scrollGlideByGroup.Count > 0; }
+        }
+
+        /// <summary>Paint-time X shift for a group's tabs while its scroll is catching up.</summary>
+        private int ScrollGlidePx(int group)
+        {
+            int offset;
+            return _scrollGlideByGroup.TryGetValue(group, out offset) ? offset : 0;
+        }
+
+        /// <summary>
+        /// Starts (or extends) the visual catch-up for a group whose scroll offset just moved
+        /// by <paramref name="deltaPx" />.
+        /// </summary>
+        private void BeginScrollGlide(int group, int deltaPx)
+        {
+            if (!IsHandleCreated || !StripVisible || _dragging || deltaPx == 0)
+            {
+                return;
+            }
+
+            // Added to whatever is still outstanding, so a second notch arriving mid-glide
+            // extends the same motion instead of restarting it from the new position and
+            // visibly stuttering.
+            int pending = ScrollGlidePx(group) + deltaPx;
+
+            if (pending == 0)
+            {
+                _scrollGlideByGroup.Remove(group);
+                _scrollGlideStartByGroup.Remove(group);
+                _scrollGlideTickByGroup.Remove(group);
+                return;
+            }
+
+            _scrollGlideByGroup[group] = pending;
+            _scrollGlideStartByGroup[group] = pending;
+            _scrollGlideTickByGroup[group] = Environment.TickCount;
+
+            if (_scrollGlideTimer == null)
+            {
+                _scrollGlideTimer = new Timer { Interval = 15 };
+                _scrollGlideTimer.Tick += OnScrollGlideTick;
+            }
+
+            _scrollGlideTimer.Start();
+            InvalidateStrip();
+        }
+
+        private Timer _scrollGlideTimer;
+
+        private void OnScrollGlideTick(object sender, EventArgs e)
+        {
+            int now = Environment.TickCount;
+
+            // Each group eases on its own clock, and finishes on its own.
+            foreach (int group in new List<int>(_scrollGlideByGroup.Keys))
+            {
+                int start;
+                int tick;
+
+                if (!_scrollGlideStartByGroup.TryGetValue(group, out start)
+                    || !_scrollGlideTickByGroup.TryGetValue(group, out tick))
+                {
+                    _scrollGlideByGroup.Remove(group);
+                    continue;
+                }
+
+                int elapsed = now - tick;
+
+                if (elapsed >= ScrollGlideMs)
+                {
+                    _scrollGlideByGroup.Remove(group);
+                    _scrollGlideStartByGroup.Remove(group);
+                    _scrollGlideTickByGroup.Remove(group);
+                    continue;
+                }
+
+                double remaining = 1.0 - (double) elapsed / ScrollGlideMs;
+                remaining = remaining * remaining * remaining;
+                _scrollGlideByGroup[group] = (int) Math.Round(start * remaining);
+            }
+
+            if (_scrollGlideByGroup.Count == 0)
+            {
+                _scrollGlideTimer?.Stop();
+            }
+
+            InvalidateStrip();
+        }
+
+        private void StopScrollGlide()
+        {
+            _scrollGlideTimer?.Stop();
+            _scrollGlideByGroup.Clear();
+            _scrollGlideStartByGroup.Clear();
+            _scrollGlideTickByGroup.Clear();
+        }
 
         /// <summary>Paint-time X offsets by tab, still travelling back to zero.</summary>
         private readonly Dictionary<FluentTab, int> _reflowOffsetByTab = new Dictionary<FluentTab, int>();
@@ -1033,14 +1153,24 @@ namespace FluentChromeTabs
                     CloseOtherTabsMenuText, false, () => CloseTabs(OtherClosableTabs(captured))));
             }
 
+            // Both sides are offered, as browsers do. "Left" and "Right" are visual claims
+            // about where the tabs sit on screen, and a mirrored strip runs the other way,
+            // so each side's caption is chosen by layout rather than by list order: the
+            // tabs BEFORE this one are the visual left in LTR and the visual right in RTL.
+            bool mirrored = IsMirrored || RightToLeft == RightToLeft.Yes;
+
+            if (ClosableTabsBefore(captured).Count > 0)
+            {
+                commands.Items.Add(new TabListItem(
+                    mirrored ? CloseTabsToTheRightMenuText : CloseTabsToTheLeftMenuText,
+                    false,
+                    () => CloseTabs(ClosableTabsBefore(captured))));
+            }
+
             if (ClosableTabsAfter(captured).Count > 0)
             {
-                // "Right" is a visual claim, and in a mirrored window the tabs after this one
-                // run leftward — so the caption follows the layout, not the list order.
                 commands.Items.Add(new TabListItem(
-                    IsMirrored || RightToLeft == RightToLeft.Yes
-                        ? CloseTabsToTheLeftMenuText
-                        : CloseTabsToTheRightMenuText,
+                    mirrored ? CloseTabsToTheLeftMenuText : CloseTabsToTheRightMenuText,
                     false,
                     () => CloseTabs(ClosableTabsAfter(captured))));
             }
@@ -1117,6 +1247,23 @@ namespace FluentChromeTabs
                 if (candidate != tab && candidate.CanClose && SameMenuScope(candidate, tab))
                 {
                     result.Add(candidate);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>Closable tabs positioned before <paramref name="tab" /> in its group.</summary>
+        private List<FluentTab> ClosableTabsBefore(FluentTab tab)
+        {
+            List<FluentTab> result = new List<FluentTab>();
+            int upTo = _tabs.IndexOf(tab);
+
+            for (int i = 0; i < upTo; i++)
+            {
+                if (_tabs[i].CanClose && SameMenuScope(_tabs[i], tab))
+                {
+                    result.Add(_tabs[i]);
                 }
             }
 
@@ -1774,19 +1921,44 @@ namespace FluentChromeTabs
             }
 
             int clamped = Math.Max(0, Math.Min(value, MaxScrollOffsetPx(group)));
-            if (ScrollOffsetPx(group) == clamped)
+            int current = ScrollOffsetPx(group);
+
+            if (current == clamped)
             {
                 return;
             }
+
+            // Deliberately NOT glided here. Scrolls that happen as part of another change
+            // — a close pulling the active tab back into view, a resize re-clamping — are
+            // already accounted for by that change's own animation, and gliding them too
+            // would move the tabs twice for one event. Only the scroll gestures below
+            // (ScrollGroupByTab) glide, because there the scroll IS the event.
+            _pendingScrollGlidePx = current - clamped;
             _scrollOffsetByGroup[group] = clamped;
             InvalidateStrip();
         }
 
         /// <summary>Scrolls a group by one tab's worth, used by the edge chevrons.</summary>
+        /// <summary>
+        /// Scrolls a group by one tab's worth, used by the edge chevrons and the wheel. This
+        /// is the gesture where the scroll itself is what the user asked for, so it is the
+        /// one that glides.
+        /// </summary>
         private void ScrollGroupByTab(int group, int direction)
         {
+            _pendingScrollGlidePx = 0;
+
             SetScrollOffsetPx(group, ScrollOffsetPx(group) + direction * (TabWidthPx(group) + TabGapPx));
+
+            BeginScrollGlide(group, _pendingScrollGlidePx);
+            _pendingScrollGlidePx = 0;
         }
+
+        /// <summary>
+        /// How far the last <see cref="SetScrollOffsetPx" /> moved the band, for the caller to
+        /// glide if that movement was a scroll gesture in its own right.
+        /// </summary>
+        private int _pendingScrollGlidePx;
 
         /// <summary>Brings a tab fully into view — called when the selection changes.</summary>
         private void EnsureTabVisible(int index)
@@ -2089,8 +2261,9 @@ namespace FluentChromeTabs
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
 
             // Close() does not always dispose straight away (a tear-off defers it through
-            // BeginInvoke), so the slide timer would keep ticking against a torn-down form.
+            // BeginInvoke), so the timers would keep ticking against a torn-down form.
             StopReflowAnimation();
+            StopScrollGlide();
 
             base.OnHandleDestroyed(e);
         }
@@ -2137,6 +2310,7 @@ namespace FluentChromeTabs
                 _toolTip?.Dispose();
                 _windowIconBitmap?.Dispose();
                 _reflowTimer?.Dispose();
+                _scrollGlideTimer?.Dispose();
             }
 
             base.Dispose(disposing);

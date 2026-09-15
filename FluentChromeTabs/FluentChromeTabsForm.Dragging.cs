@@ -235,8 +235,11 @@ namespace FluentChromeTabs
         {
             // A slide still running would fight the drag: the dragged tab is painted at the
             // cursor with no offset while its neighbours are mid-flight, and reordering
-            // re-keys those offsets onto positions they were never measured for.
+            // re-keys those offsets onto positions they were never measured for. The scroll
+            // glide goes for the same reason — the drag positions tabs against the settled
+            // offset, so a band still sliding would put them under the wrong cursor spot.
             StopReflowAnimation();
+            StopScrollGlide();
 
             // Dragging the only tab of a window drags the whole window, like Chrome
             if (_tabs.Count == 1)

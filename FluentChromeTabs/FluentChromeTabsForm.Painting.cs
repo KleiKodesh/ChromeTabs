@@ -144,6 +144,8 @@ namespace FluentChromeTabs
                 GraphicsState groupClip = g.Save();
                 g.SetClip(GroupTabsClipRect(group), CombineMode.Intersect);
 
+                int scrollGlide = ScrollGliding ? ScrollGlidePx(group) : 0;
+
                 for (int i = 0; i < _tabs.Count; i++)
                 {
                     if (GroupOf(_tabs[i]) != group)
@@ -160,6 +162,10 @@ namespace FluentChromeTabs
                         {
                             rect.X += ReflowOffsetPx(i);
                         }
+
+                        // The whole band lags together while a scroll catches up, so the tabs
+                        // keep their spacing and the group slides as one.
+                        rect.X += scrollGlide;
 
                         DrawTab(g, i, rect);
                     }
