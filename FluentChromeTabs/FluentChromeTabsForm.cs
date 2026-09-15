@@ -575,7 +575,14 @@ namespace FluentChromeTabs
                 _tabs[_selectedIndex].Content.Visible = false;
             }
 
+            int previous = _selectedIndex;
             _selectedIndex = index;
+
+            // Selection changes which tab carries the widened size, so the content to the
+            // LEFT of the viewport can grow or shrink. Left uncorrected, that slides every
+            // visible tab sideways on a click that was only meant to change selection.
+            // Absorbing the delta into the scroll offset keeps the strip still.
+            AbsorbActiveWidthShift(previous, index);
 
             // Selecting a tab that is scrolled out of sight must bring it back, or the
             // strip would show no active tab at all.
@@ -1162,9 +1169,15 @@ namespace FluentChromeTabs
         {
             get
             {
+                // One of the visible tabs is the active one, which is held at the wider
+                // icon-plus-× size; the rest sit at the plain floor.
+                int tabsRoom = _minVisibleTabs > 0
+                    ? (MinTabWidthWithClosePx + TabGapPx) + (_minVisibleTabs - 1) * (MinTabWidthPx + TabGapPx)
+                    : 0;
+
                 int perRegion = (_showTabListButton ? TabListButtonSizePx + Dpi(6) : 0)
                     + (ShowNewTabButton ? NewTabButtonSizePx + Dpi(8) : 0)
-                    + _minVisibleTabs * (MinTabWidthPx + TabGapPx)
+                    + tabsRoom
                     + 2 * ScrollChevronInsetPx
                     + Dpi(8);
 
@@ -1341,6 +1354,139 @@ namespace FluentChromeTabs
             return Math.Max(MinTabWidthPx, Math.Min(Dpi(220), width));
         }
 
+        /// <summary>
+        /// Width of one tab: the group's shared width, except that the active tab is widened
+        /// to <see cref="MinTabWidthWithClosePx" /> when the shared width is too narrow to
+        /// fit its favicon and its × side by side.
+        ///
+        /// With many tabs open every tab sits at <see cref="MinTabWidthPx" />, where the two
+        /// would overlap. Rather than drop either one, the active tab gets the few extra
+        /// pixels it needs — it is the one tab whose icon AND close button both have to stay
+        /// reachable, and widening only it costs the strip a single tab's worth of room.
+        /// </summary>
+        private int TabWidthPx(int index, int group)
+        {
+            int width = TabWidthPx(group);
+
+            return IsActiveTab(index) && _tabs[index].CanClose && width < MinTabWidthWithClosePx
+                ? MinTabWidthWithClosePx
+                : width;
+        }
+
+        /// <summary>
+        /// Keeps the visible tabs still when the widened active tab changes. Only a width
+        /// change BEFORE the scroll viewport moves what the user is looking at, so the
+        /// offset is shifted by exactly that much — a change at or after the viewport
+        /// simply re-lays out to the right of it and needs no correction.
+        /// </summary>
+        private void AbsorbActiveWidthShift(int previous, int current)
+        {
+            if (previous < 0 || previous >= _tabs.Count || current < 0 || current >= _tabs.Count)
+            {
+                return;
+            }
+
+            int group = GroupOf(_tabs[current]);
+
+            if (GroupOf(_tabs[previous]) != group || !GroupOverflows(group))
+            {
+                return;
+            }
+
+            // Measured with _selectedIndex already moved, so TabOffsetPx reports the NEW
+            // layout; comparing the two tabs' offsets against the offset they had before
+            // would need the old layout, so the delta is derived from the widening instead.
+            int bonus = MinTabWidthWithClosePx - TabWidthPx(group);
+
+            if (bonus <= 0)
+            {
+                return;
+            }
+
+            int offset = ScrollOffsetPx(group);
+            int shift = 0;
+
+            // The previously active tab shrank: content before the viewport lost its bonus.
+            if (_tabs[previous].CanClose && TabOffsetPx(previous, group) < offset)
+            {
+                shift -= bonus;
+            }
+
+            // The newly active tab grew: content before the viewport gained one.
+            if (_tabs[current].CanClose && TabOffsetPx(current, group) < offset)
+            {
+                shift += bonus;
+            }
+
+            if (shift != 0)
+            {
+                SetScrollOffsetPx(group, offset + shift);
+            }
+        }
+
+        /// <summary>
+        /// Group position a tab dropped at <paramref name="xPx" /> should take: the first
+        /// tab whose midpoint the point has passed. Walked rather than divided by a slot
+        /// size, because the active tab is wider than the rest, so a uniform division
+        /// drifts by that difference for every position after it.
+        /// </summary>
+        private int DropIndexAtPx(int group, int xPx)
+        {
+            int left = GroupTabsClipRect(group).Left - ScrollOffsetPx(group);
+            int position = 0;
+            int cursor = left;
+
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                if (GroupOf(_tabs[i]) != group)
+                {
+                    continue;
+                }
+
+                int width = TabWidthPx(i, group);
+
+                if (xPx < cursor + width / 2)
+                {
+                    return position;
+                }
+
+                cursor += width + TabGapPx;
+                position++;
+            }
+
+            return position;
+        }
+
+        /// <summary>The tab the strip is showing as current — selected, or a split region's own.</summary>
+        private bool IsActiveTab(int index)
+        {
+            return index == _selectedIndex || _tabs[index].Highlighted;
+        }
+
+        /// <summary>
+        /// Distance from the group's first tab to the left edge of <paramref name="index" />.
+        /// Summed rather than multiplied because the active tab may be wider than the rest.
+        /// </summary>
+        private int TabOffsetPx(int index, int group)
+        {
+            int position = GroupPosition(index);
+            int offset = 0;
+            int seen = 0;
+
+            for (int i = 0; i < _tabs.Count && seen < position; i++)
+            {
+                if (GroupOf(_tabs[i]) != group)
+                {
+                    continue;
+                }
+
+                offset += TabWidthPx(i, group) + TabGapPx;
+                seen++;
+            }
+
+            return offset;
+        }
+
         // ── Overflow scrolling ────────────────────────────────────────────────────
         // Once tabs hit MinTabWidthPx they stop shrinking, so a group's tabs can be
         // wider than its region. Rather than let them run under the caption buttons,
@@ -1358,7 +1504,19 @@ namespace FluentChromeTabs
             {
                 return 0;
             }
-            return count * (TabWidthPx(group) + TabGapPx) - TabGapPx;
+
+            // Summed per tab: the active one may be wider than the shared width.
+            int total = 0;
+
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                if (GroupOf(_tabs[i]) == group)
+                {
+                    total += TabWidthPx(i, group) + TabGapPx;
+                }
+            }
+
+            return total - TabGapPx;
         }
 
         /// <summary>How far the group can scroll before its last tab is flush right; 0 when it fits.</summary>
@@ -1425,8 +1583,8 @@ namespace FluentChromeTabs
                 return;
             }
 
-            int width = TabWidthPx(group);
-            int tabLeft = GroupPosition(index) * (width + TabGapPx);
+            int width = TabWidthPx(index, group);
+            int tabLeft = TabOffsetPx(index, group);
             int offset = ScrollOffsetPx(group);
             int visible = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
 
@@ -1443,13 +1601,13 @@ namespace FluentChromeTabs
         private Rectangle TabRect(int index)
         {
             int group = GroupOf(_tabs[index]);
-            int width = TabWidthPx(group);
+            int width = TabWidthPx(index, group);
 
             // Tabs start at the clip band's left edge, which is inset by a chevron while
             // the group overflows — otherwise the first tab would sit underneath the
             // leading chevron and the last would run past the trailing one.
             return new Rectangle(
-                GroupTabsClipRect(group).Left + GroupPosition(index) * (width + TabGapPx) - ScrollOffsetPx(group),
+                GroupTabsClipRect(group).Left + TabOffsetPx(index, group) - ScrollOffsetPx(group),
                 StripHeightPx - TabHeightPx - TabBottomMarginPx,
                 width,
                 TabHeightPx);
@@ -1487,55 +1645,43 @@ namespace FluentChromeTabs
                 return false;
             }
 
-            int width = TabWidthPx(GroupOf(_tabs[index]));
-            bool active = index == _selectedIndex || _tabs[index].Highlighted;
+            // The active tab always shows its ×: TabWidthPx widens it far enough that the
+            // × and the favicon both fit, so neither has to give way. That guarantees at
+            // least one close button on the strip no matter how many tabs are open —
+            // without it, everything sits at MinTabWidthPx with no × anywhere, leaving only
+            // Ctrl+W and middle-click, which a user reaching for an × will not find.
+            if (IsActiveTab(index))
+            {
+                return true;
+            }
 
-            // The close button is anchored to the right edge and the favicon to the
-            // left, so on a narrow tab they collide — the × would be drawn on top of
-            // the icon. Only one of the two can be kept.
-            //
-            // On an INACTIVE tab the icon wins: it identifies the tab, and the tab has
-            // to be selected before it can be closed anyway.
-            //
-            // On the ACTIVE tab the × wins instead (TabShowsIcon drops the favicon to
-            // make room). With many tabs open every tab is at MinTabWidthPx, and if the
-            // active tab dropped its × too there would be no close button anywhere on
-            // the strip — leaving only Ctrl+W and middle-click, neither of which is
-            // discoverable by a user reaching for an ×. Keeping it on the active tab
-            // means repeated clicking walks through the tabs, which is exactly the
-            // gesture wanted when the strip is overfull. Chrome behaves the same way.
-            if (!active && _tabs[index].Icon != null && width < MinTabWidthWithClosePx)
+            // An inactive tab keeps its icon instead: the two would overlap at this width,
+            // and the icon is what identifies a tab the user has not selected yet.
+            int width = TabWidthPx(index, GroupOf(_tabs[index]));
+
+            if (_tabs[index].Icon != null && width < MinTabWidthWithClosePx)
             {
                 return false;
             }
 
-            return active || width >= Dpi(72);
+            return width >= Dpi(72);
         }
 
         /// <summary>
-        /// Whether the tab draws its favicon. Dropped only on the active tab when it is too
-        /// narrow to show icon and × together — see <see cref="TabShowsClose" /> for why the
-        /// × is the one that survives there.
+        /// Whether the tab draws its favicon. Always, when it has one: the active tab is
+        /// widened to fit the icon alongside its ×, and inactive tabs drop the × instead
+        /// (see <see cref="TabShowsClose" />), so the two never have to compete.
         /// </summary>
         private bool TabShowsIcon(int index)
         {
-            if (_tabs[index].Icon == null)
-            {
-                return false;
-            }
-
-            bool active = index == _selectedIndex || _tabs[index].Highlighted;
-
-            return !(active
-                && TabShowsClose(index)
-                && TabWidthPx(GroupOf(_tabs[index])) < MinTabWidthWithClosePx);
+            return _tabs[index].Icon != null;
         }
 
         private Rectangle NewTabButtonRect(int group)
         {
             int count = GroupTabCount(group);
             int last = count > 0
-                ? GroupTabsLeftPx(group) + count * (TabWidthPx(group) + TabGapPx) - TabGapPx
+                ? GroupTabsLeftPx(group) + GroupContentWidthPx(group)
                 : GroupTabsLeftPx(group);
 
             // The "+" trails the last tab, but an overflowing group's tabs extend well past

@@ -286,7 +286,7 @@ namespace FluentChromeTabs
                     _tabs[_dragIndex].Group = cursorGroup;
 
                     // The target region can size tabs differently — keep the grab point sane
-                    _dragOffsetX = Math.Max(0, Math.Min(_dragOffsetX, TabWidthPx(cursorGroup) - Dpi(16)));
+                    _dragOffsetX = Math.Max(0, Math.Min(_dragOffsetX, TabWidthPx(_dragIndex, cursorGroup) - Dpi(16)));
                 }
             }
 
@@ -294,12 +294,16 @@ namespace FluentChromeTabs
             int group = GroupOf(_tabs[_dragIndex]);
             int count = GroupTabCount(group);
             int tabsLeft = GroupTabsLeftPx(group);
-            int slot = TabWidthPx(group) + TabGapPx;
-            int maxX = tabsLeft + (count - 1) * slot;
+            // The dragged tab is the active one, so it carries the widened size; the strip
+            // can only travel by the rest of the content's width.
+            int maxX = tabsLeft + GroupContentWidthPx(group) - TabWidthPx(_dragIndex, group);
 
             _dragVisualX = Math.Max(tabsLeft, Math.Min(p.X - _dragOffsetX, maxX));
 
-            int target = (int) Math.Round((double) (_dragVisualX - tabsLeft) / slot);
+            // Resolved against real tab positions rather than a uniform slot: widths vary,
+            // so dividing by one slot size drifts past the widened tab. The card's midpoint
+            // is what decides, matching how the drop reads visually.
+            int target = DropIndexAtPx(group, _dragVisualX + TabWidthPx(_dragIndex, group) / 2);
             target = Math.Max(0, Math.Min(target, count - 1));
 
             if (target != GroupPosition(_dragIndex))
@@ -428,8 +432,10 @@ namespace FluentChromeTabs
 
                 DetachTabCore(tab);
 
-                int slot = candidate.TabWidthPx(0) + candidate.TabGapPx;
-                int index = Math.Max(0, Math.Min((local.X - candidate.GroupTabsLeftPx(0) + slot / 2) / Math.Max(1, slot), candidate._tabs.Count));
+                // Walked rather than divided by a uniform slot: the target window's active
+                // tab is wider than the rest, so everything past it sits further right than
+                // a single slot size predicts and the drop would land one position short.
+                int index = candidate.DropIndexAtPx(0, local.X);
 
                 tab.Group = 0;
                 candidate.AttachTab(index, tab);
@@ -439,7 +445,7 @@ namespace FluentChromeTabs
                 // Continue the drag inside the target window
                 candidate._dragging = true;
                 candidate._dragIndex = candidate._tabs.IndexOf(tab);
-                candidate._dragOffsetX = Math.Min(offset, candidate.TabWidthPx(0) - Dpi(16));
+                candidate._dragOffsetX = Math.Min(offset, candidate.TabWidthPx(candidate._dragIndex, 0) - Dpi(16));
                 candidate._dragVisualX = local.X - candidate._dragOffsetX;
                 candidate.Capture = true;
                 candidate.InvalidateStrip();

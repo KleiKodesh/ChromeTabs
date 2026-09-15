@@ -32,7 +32,8 @@ animations all stay perfectly smooth. One window, no chasing, no flicker.
 - 📌 **Pinnable tabs** (`CanClose = false`), per-tab icons, tooltips for truncated titles,
   middle-click close
 - ❌ **Close never goes out of reach**: tabs shrink and then scroll as they pile up, and the
-  active tab keeps its × (dropping its icon) even at minimum width. Right-click a tab for
+  active tab is widened just enough to keep its icon AND its × side by side, so there is
+  always a close button on the strip. Right-click a tab for
   close / close others / close to the right, or use the × on each row of the tab list
 - 🖥 **Per-monitor V2 DPI** support
 - 🌍 **Full RTL / Hebrew support** — set the standard `RightToLeft = Yes` and
