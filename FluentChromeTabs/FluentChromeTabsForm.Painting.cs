@@ -251,7 +251,8 @@ namespace FluentChromeTabs
 
             if (active || hover)
             {
-                // Edge style: the tab is a floating rounded card; the active one gets a subtle outline
+                // The tab is a floating rounded card; the active one gets a subtle outline
+                // in light themes only.
                 using (GraphicsPath path = RoundedRectPath(rect, TabRadiusPx))
                 {
                     using (SolidBrush brush = new SolidBrush(active ? _palette.TabActive : _palette.TabHover))
@@ -259,7 +260,6 @@ namespace FluentChromeTabs
                         g.FillPath(brush, path);
                     }
 
-                    // A soft outline on the active tab in light themes only; dark tabs are borderless
                     if (active && !_isDark)
                     {
                         using (Pen pen = new Pen(_palette.TabBorder))
@@ -270,7 +270,8 @@ namespace FluentChromeTabs
                 }
             }
 
-            int textLeft = rect.Left + Dpi(10);
+            // Firefox Nova: --tab-padding-inline 8px, 16px favicon, --tab-icon-margin-inline-end 5.5px
+            int textLeft = rect.Left + Dpi(8);
 
             if (TabShowsIcon(index))
             {
@@ -281,7 +282,7 @@ namespace FluentChromeTabs
             }
 
             bool showClose = TabShowsClose(index);
-            int textRight = showClose ? TabCloseRect(rect).Left - Dpi(4) : rect.Right - Dpi(8);
+            int textRight = showClose ? TabCloseRect(rect).Left : rect.Right - Dpi(8);
 
             // TextRenderer.DrawText ignores the strip clip set in OnPaint, so the text box has
             // to be clamped by hand. Clamp to the group's tab band, not just to the caption
@@ -321,18 +322,20 @@ namespace FluentChromeTabs
                 {
                     Color surface = active ? _palette.TabActive : hover ? _palette.TabHover : _palette.Strip;
 
-                    using (SolidBrush brush = new SolidBrush(Palette.Blend(surface, _palette.TextActive, 0.12)))
+                    using (SolidBrush brush = new SolidBrush(Palette.Blend(surface, _palette.TextActive, 0.07)))
                     using (GraphicsPath path = RoundedRectPath(close, Dpi(4)))
                     {
                         g.FillPath(brush, path);
                     }
                 }
 
+                // Firefox's close-12.svg: an X spanning (2,2)-(10,10) of a 12px box, stroke ~1.25px
                 using (Pen pen = GlyphPen(StripTextColor(active)))
                 {
+                    pen.Width = Math.Max(1f, 1.25f * GlyphScale);
                     float ccx = close.Left + close.Width / 2f;
                     float ccy = close.Top + close.Height / 2f;
-                    float arm = 3.5f * GlyphScale;
+                    float arm = 4f * GlyphScale;
                     g.DrawLine(pen, ccx - arm, ccy - arm, ccx + arm, ccy + arm);
                     g.DrawLine(pen, ccx - arm, ccy + arm, ccx + arm, ccy - arm);
                 }

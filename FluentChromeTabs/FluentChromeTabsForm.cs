@@ -191,7 +191,7 @@ namespace FluentChromeTabs
 
         private bool _stripVisible = true;
 
-        /// <summary>Height of the tab strip in logical pixels (scaled for DPI). Defaults to 40.</summary>
+        /// <summary>Height of the tab strip in logical pixels (scaled for DPI). Defaults to 44 (Firefox Nova: 32px tab + 6px above and below).</summary>
         public int StripHeight
         {
             get { return _stripHeight; }
@@ -203,7 +203,7 @@ namespace FluentChromeTabs
             }
         }
 
-        private int _stripHeight = 40;
+        private int _stripHeight = 44;
 
         /// <summary>Height of the tab cards in logical pixels (scaled for DPI). Defaults to 32.</summary>
         public int TabHeight
@@ -1442,17 +1442,26 @@ namespace FluentChromeTabs
             get { return Dpi(Math.Min(_tabHeight, _stripHeight - 8)); }
         }
 
-        /// <summary>Gap between the bottom of the floating tab cards and the strip edge (Edge style).</summary>
+        /// <summary>
+        /// Gap between the bottom of the floating tab pills and the strip edge. Firefox Nova
+        /// centers the tabs (equal --tab-margin-block above and below), so this is half the
+        /// room the strip leaves around them: 6px at the 44/32 default, 4px at 36/28 compact.
+        /// </summary>
         private int TabBottomMarginPx
+        {
+            get { return (StripHeightPx - TabHeightPx) / 2; }
+        }
+
+        /// <summary>Firefox Nova: each tab carries 2px inline padding (--tab-margin-overflow-clip), so 4px between pills.</summary>
+        private int TabGapPx
         {
             get { return Dpi(4); }
         }
 
-        private int TabGapPx
-        {
-            get { return Dpi(2); }
-        }
-
+        /// <summary>
+        /// Matches the host app's title-bar corners rather than Firefox Nova's pills, so the
+        /// strip shares the contours of the app below it.
+        /// </summary>
         private int TabRadiusPx
         {
             get { return Dpi(6); }
@@ -1460,7 +1469,7 @@ namespace FluentChromeTabs
 
         /// <summary>
         /// Narrowest a tab may shrink to. Sized so the favicon still fits whole:
-        /// Dpi(10) left padding + Dpi(16) icon + Dpi(10) trailing room.
+        /// Dpi(8) left padding + Dpi(16) icon + Dpi(12) trailing room.
         /// </summary>
         private int MinTabWidthPx
         {
@@ -1469,7 +1478,7 @@ namespace FluentChromeTabs
 
         /// <summary>
         /// Narrowest a tab may be and still draw its close button alongside the favicon:
-        /// Dpi(10) padding + Dpi(16) icon + Dpi(6) gap + Dpi(16) close + Dpi(8) trailing.
+        /// Dpi(8) padding + Dpi(16) icon + Dpi(6) gap + Dpi(20) close + Dpi(4) trailing = 54, rounded up.
         /// Below this the two would overlap, so the close is dropped.
         /// </summary>
         private int MinTabWidthWithClosePx
@@ -1695,21 +1704,22 @@ namespace FluentChromeTabs
 
             if (count == 0)
             {
-                return Dpi(220);
+                return Dpi(225);
             }
 
             int available = Math.Max(0, GroupTabsRightPx(group) - GroupTabsLeftPx(group));
             int width = (available - (count - 1) * TabGapPx) / count;
 
             // Shrink tabs to share the available width evenly, down to a floor that keeps
-            // the favicon whole: it is drawn Dpi(10) from the left edge at Dpi(16) square,
+            // the favicon whole: it is drawn Dpi(8) from the left edge at Dpi(16) square,
             // so a narrower tab clips the icon against the rounded right edge and leaves
-            // an unreadable sliver. Dpi(36) = 10 + 16 + 10 of trailing room.
+            // an unreadable sliver. Dpi(36) = 8 + 16 + 12 of trailing room (the pill's
+            // round end eats into it).
             //
             // Past the floor the tabs stop shrinking and the strip SCROLLS instead (see
             // ScrollOffsetPx and the edge chevrons) — squeezing further would just make
             // every tab equally unidentifiable.
-            return Math.Max(MinTabWidthPx, Math.Min(Dpi(220), width));
+            return Math.Max(MinTabWidthPx, Math.Min(Dpi(225), width));
         }
 
         /// <summary>
@@ -2031,8 +2041,10 @@ namespace FluentChromeTabs
 
         private Rectangle TabCloseRect(Rectangle tabRect)
         {
-            int size = Dpi(16);
-            return new Rectangle(tabRect.Right - size - Dpi(8), tabRect.Top + (tabRect.Height - size) / 2, size, size);
+            // Firefox Nova: a 20px button around a 12px glyph, pulled half the 8px tab
+            // padding toward the edge (margin-inline-end: calc(var(--tab-padding-inline) / -2)).
+            int size = Dpi(20);
+            return new Rectangle(tabRect.Right - size - Dpi(4), tabRect.Top + (tabRect.Height - size) / 2, size, size);
         }
 
         private bool TabShowsClose(int index)
