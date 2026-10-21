@@ -34,7 +34,7 @@ namespace FluentChromeTabs
         {
             Strip = Color.FromArgb(243, 243, 243),
             TabActive = Color.White,
-            TabHover = Color.FromArgb(234, 234, 234),
+            TabHover = Color.FromArgb(222, 222, 222),
             TabBorder = Color.FromArgb(214, 214, 214),
             TextActive = Color.FromArgb(26, 26, 26),
             TextInactive = Color.FromArgb(96, 96, 96),
@@ -123,7 +123,9 @@ namespace FluentChromeTabs
             {
                 Strip = chrome,
                 TabActive = tabActive,
-                TabHover = Blend(chrome, tabActive, 0.45),
+                // Light strips sit near white, so lightening toward the active tab barely
+                // shows — darken toward the text instead.
+                TabHover = dark ? Blend(chrome, tabActive, 0.45) : Blend(chrome, text, 0.09),
                 TabBorder = Blend(tabActive, text, 0.18),
                 TextActive = text,
                 TextInactive = Blend(text, chrome, 0.35),

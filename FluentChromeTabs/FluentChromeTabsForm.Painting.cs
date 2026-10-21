@@ -282,7 +282,7 @@ namespace FluentChromeTabs
             }
 
             bool showClose = TabShowsClose(index);
-            int textRight = showClose ? TabCloseRect(rect).Left : rect.Right - Dpi(8);
+            int textRight = rect.Right - Dpi(8);
 
             // TextRenderer.DrawText ignores the strip clip set in OnPaint, so the text box has
             // to be clamped by hand. Clamp to the group's tab band, not just to the caption
@@ -312,16 +312,46 @@ namespace FluentChromeTabs
 
             Rectangle textRect = new Rectangle(textLeft, rect.Top, Math.Max(0, textRight - textLeft), rect.Height);
 
+            Rectangle close = showClose ? TabCloseRect(rect) : Rectangle.Empty;
+            bool textUnderClose = false;
+
+            if (showClose)
+            {
+                // Text runs under the X only when it doesn't fit before it; otherwise stop at the X.
+                int beforeClose = Math.Max(0, Math.Min(close.Left, textRight) - textLeft);
+                textUnderClose = TextRenderer.MeasureText(g, tab.Title, Font, Size.Empty, textFlags).Width > beforeClose;
+                if (!textUnderClose)
+                    textRect.Width = beforeClose;
+            }
+
             TextRenderer.DrawText(g, tab.Title, Font, textRect, StripTextColor(active), textFlags);
 
             if (showClose)
             {
-                Rectangle close = TabCloseRect(rect);
+                Color surface = active ? _palette.TabActive : hover ? _palette.TabHover : _palette.Strip;
+
+                if (textUnderClose && textRect.Right > close.Left)
+                {
+                    // Small tab: the title fades out into the tab's own surface under the X
+                    // instead of being hard-clipped at it.
+                    int fade = Dpi(16);
+                    int coverRight = textRect.Right;
+                    Rectangle fadeRect = new Rectangle(close.Left - fade, rect.Top + 1, fade, rect.Height - 2);
+                    Rectangle solidRect = new Rectangle(close.Left, rect.Top + 1, Math.Max(0, coverRight - close.Left), rect.Height - 2);
+
+                    using (LinearGradientBrush fadeBrush = new LinearGradientBrush(
+                        new Rectangle(fadeRect.Left - 1, fadeRect.Top, fadeRect.Width + 2, fadeRect.Height),
+                        Color.FromArgb(0, surface), surface, LinearGradientMode.Horizontal))
+                    using (SolidBrush solid = new SolidBrush(surface))
+                    {
+                        g.FillRectangle(fadeBrush, fadeRect);
+                        if (solidRect.Width > 0)
+                            g.FillRectangle(solid, solidRect);
+                    }
+                }
 
                 if (_hoverTabClose && index == _hoverTab && !_dragging)
                 {
-                    Color surface = active ? _palette.TabActive : hover ? _palette.TabHover : _palette.Strip;
-
                     using (SolidBrush brush = new SolidBrush(Palette.Blend(surface, _palette.TextActive, 0.07)))
                     using (GraphicsPath path = RoundedRectPath(close, Dpi(4)))
                     {
