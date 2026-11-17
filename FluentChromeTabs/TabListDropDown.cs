@@ -138,6 +138,8 @@ namespace FluentChromeTabs
         private readonly bool _rtl;
         private readonly float _scale;
         private ThemedToolTip _toolTip;
+        private Timer _toolTipDelay;
+        private Action _pendingTip;
         private Font _headerFont;
         private int _hoverRow = -1;
         // Row whose × the pointer is over (-1 = none); the button only paints its
@@ -929,6 +931,7 @@ namespace FluentChromeTabs
             if (tip != _toolTipShownFor)
             {
                 _toolTipShownFor = tip;
+                _toolTipDelay?.Stop();
 
                 if (tip != null)
                 {
@@ -939,7 +942,27 @@ namespace FluentChromeTabs
 
                     Rectangle textRect = TextRectFor(row);
                     Point start = PointToScreen(new Point(_rtl ? textRect.Right : textRect.Left, RowRect(row).Bottom + S(2)));
-                    _toolTip.ShowText(tip, _palette, _rtl, start.X, start.Y);
+
+                    // Natural feel: wait before the first tip; once one is up, switch at once.
+                    if (_toolTip.Visible)
+                    {
+                        _toolTip.ShowText(tip, _palette, _rtl, start.X, start.Y);
+                    }
+                    else
+                    {
+                        if (_toolTipDelay == null)
+                        {
+                            _toolTipDelay = new Timer { Interval = 600 };
+                            _toolTipDelay.Tick += (s, e) =>
+                            {
+                                _toolTipDelay.Stop();
+                                _pendingTip?.Invoke();
+                            };
+                        }
+
+                        _pendingTip = () => _toolTip.ShowText(tip, _palette, _rtl, start.X, start.Y);
+                        _toolTipDelay.Start();
+                    }
                 }
                 else
                 {

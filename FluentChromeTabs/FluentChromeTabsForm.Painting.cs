@@ -704,6 +704,10 @@ namespace FluentChromeTabs
                 string tip = string.IsNullOrEmpty(tab.ListTitle) ? tab.Title : tab.ListTitle;
                 ShowStripToolTip(tab, tip, TabRect(_hoverTab));
             }
+            else if (_hoverTabListGroup >= 0 && !_dragging)
+            {
+                ShowStripToolTip("tablist:" + _hoverTabListGroup, TabListOpenTabsHeader, TabListButtonRect(_hoverTabListGroup));
+            }
             else
             {
                 ShowStripToolTip(null, null, Rectangle.Empty);
@@ -734,9 +738,55 @@ namespace FluentChromeTabs
 
             _toolTipKey = key;
 
+            _toolTipDelay?.Stop();
+
             if (key == null || string.IsNullOrEmpty(text))
             {
+                if (_toolTip != null && _toolTip.Visible)
+                {
+                    _toolTipHiddenAt = Environment.TickCount;
+                }
+
                 _toolTip?.HideTip();
+                return;
+            }
+
+            // Natural feel, like Windows tooltips: wait before the first tip; once one is up
+            // (or was just up), moving to the next item switches it at once.
+            bool warm = (_toolTip != null && _toolTip.Visible)
+                || unchecked(Environment.TickCount - _toolTipHiddenAt) < ToolTipWarmMs;
+            if (!warm)
+            {
+                _toolTip?.HideTip();
+                if (_toolTipDelay == null)
+                {
+                    _toolTipDelay = new Timer { Interval = ToolTipInitialDelayMs };
+                }
+
+                _toolTipDelay.Tick -= _toolTipDelayTick;
+                _toolTipDelayTick = (s, e) =>
+                {
+                    _toolTipDelay.Stop();
+                    PlaceStripToolTip(text, anchorClientRect);
+                };
+                _toolTipDelay.Tick += _toolTipDelayTick;
+                _toolTipDelay.Start();
+                return;
+            }
+
+            PlaceStripToolTip(text, anchorClientRect);
+        }
+
+        private const int ToolTipInitialDelayMs = 600;
+        private const int ToolTipWarmMs = 400;
+        private Timer _toolTipDelay;
+        private EventHandler _toolTipDelayTick;
+        private int _toolTipHiddenAt = Environment.TickCount - 100000;
+
+        private void PlaceStripToolTip(string text, Rectangle anchorClientRect)
+        {
+            if (IsTabContextMenuOpen || IsTabListOpen)
+            {
                 return;
             }
 
@@ -758,6 +808,7 @@ namespace FluentChromeTabs
         private void HideStripToolTip()
         {
             _toolTipKey = null;
+            _toolTipDelay?.Stop();
             _toolTip?.HideTip();
         }
     }
