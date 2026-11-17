@@ -952,7 +952,7 @@ namespace FluentChromeTabs
                     {
                         if (_toolTipDelay == null)
                         {
-                            _toolTipDelay = new Timer { Interval = 600 };
+                            _toolTipDelay = new Timer { Interval = 400 };
                             _toolTipDelay.Tick += (s, e) =>
                             {
                                 _toolTipDelay.Stop();

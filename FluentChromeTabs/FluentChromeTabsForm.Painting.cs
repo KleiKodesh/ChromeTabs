@@ -777,7 +777,7 @@ namespace FluentChromeTabs
             PlaceStripToolTip(text, anchorClientRect);
         }
 
-        private const int ToolTipInitialDelayMs = 600;
+        private const int ToolTipInitialDelayMs = 400;
         private const int ToolTipWarmMs = 400;
         private Timer _toolTipDelay;
         private EventHandler _toolTipDelayTick;
