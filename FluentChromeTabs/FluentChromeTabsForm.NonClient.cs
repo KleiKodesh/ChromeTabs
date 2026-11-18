@@ -22,8 +22,30 @@ namespace FluentChromeTabs
         private Rectangle? _boundsBeforeMinimize;
         private bool _restoreFixPending;
 
-        private static int ResizeBorderHeight()
+        // Per-window DPI, not GetSystemMetrics: that answers for the thread's DPI context
+        // (system DPI for a system-aware or mixed-mode host such as Word), so on a monitor
+        // with another scale the maximized inset and top resize band came out wrong.
+        // Asked live rather than via EffectiveDpi: WM_NCCALCSIZE runs mid DPI change,
+        // before the cached value is reset.
+        private int ResizeBorderHeight()
         {
+            if (IsHandleCreated)
+            {
+                try
+                {
+                    uint dpi = NativeMethods.GetDpiForWindow(Handle);
+                    if (dpi > 0)
+                    {
+                        return NativeMethods.GetSystemMetricsForDpi(NativeMethods.SM_CYSIZEFRAME, dpi)
+                            + NativeMethods.GetSystemMetricsForDpi(NativeMethods.SM_CXPADDEDBORDER, dpi);
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    // Pre-1607 Windows 10 - fall through to the thread-DPI metrics
+                }
+            }
+
             return NativeMethods.GetSystemMetrics(NativeMethods.SM_CYSIZEFRAME) + NativeMethods.GetSystemMetrics(NativeMethods.SM_CXPADDEDBORDER);
         }
 
@@ -92,6 +114,28 @@ namespace FluentChromeTabs
                         }
                     }
 
+                    return;
+                }
+
+                case NativeMethods.WM_DPICHANGED:
+                {
+                    // WinForms on .NET Framework raises OnDpiChanged only in its PerMonitorV2
+                    // app.config mode. A host without it (Word's add-in thread, the main app)
+                    // still gets WM_DPICHANGED when the window is per-monitor aware, so the
+                    // strip kept the old monitor's metrics after a drag. Handle it here.
+                    base.WndProc(ref m);
+
+                    NativeMethods.RECT suggested = (NativeMethods.RECT) Marshal.PtrToStructure(m.LParam, typeof(NativeMethods.RECT));
+                    Rectangle target = Rectangle.FromLTRB(suggested.left, suggested.top, suggested.right, suggested.bottom);
+                    if (Bounds != target && WindowState == FormWindowState.Normal)
+                    {
+                        NativeMethods.SetWindowPos(Handle, IntPtr.Zero, target.X, target.Y, target.Width, target.Height,
+                            NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+                    }
+
+                    _effectiveDpi = 0;
+                    UpdateMetrics();
+                    Invalidate();
                     return;
                 }
 

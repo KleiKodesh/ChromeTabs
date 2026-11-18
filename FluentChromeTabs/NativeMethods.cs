@@ -126,6 +126,11 @@ namespace FluentChromeTabs
         internal static extern uint GetDpiForWindow(IntPtr hwnd);
 
         [DllImport("user32.dll")]
+        internal static extern int GetSystemMetricsForDpi(int index, uint dpi);
+
+        internal const int WM_DPICHANGED = 0x02E0;
+
+        [DllImport("user32.dll")]
         internal static extern bool IsZoomed(IntPtr hwnd);
 
         [DllImport("user32.dll")]
