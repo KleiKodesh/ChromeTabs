@@ -32,19 +32,24 @@ namespace FluentChromeTabs
 
         /// <summary>
         /// When true, a host moves tabs between windows itself (its tabs stand for content the
-        /// library cannot move). The drag looks and feels the same, but its outcome is reported
-        /// instead of applied: <see cref="TabTornOff" /> replaces opening a window of this type,
-        /// and <see cref="TabDroppedFromOtherWindow" /> tells the target what arrived. Dragging a
-        /// window's only tab drags the tab (so it can be dropped onto another window) until it
-        /// leaves the strip, then the window moves. Needs <see cref="AllowTabDetach" />.
+        /// library cannot move). A tab dragged out of the strip is then not torn off: the drag
+        /// goes on with the tab still on this strip, and is reported through
+        /// <see cref="TabDragOutside" /> - the host draws what follows the cursor and decides,
+        /// on release, where the tab goes. Back over the strip, the tab reorders again.
+        /// Needs <see cref="AllowTabDetach" />.
         /// </summary>
         public bool HostMovesTabsBetweenWindows { get; set; }
 
-        /// <summary>Raised when a tab is dragged off the strip while <see cref="HostMovesTabsBetweenWindows" /> is on.</summary>
-        public event EventHandler<FluentTabTornOffEventArgs> TabTornOff;
+        /// <summary>
+        /// A tab being dragged outside this strip (<see cref="HostMovesTabsBetweenWindows" />):
+        /// it left the strip, moved, came back, was dropped somewhere, or the drag was given up
+        /// (Escape, the mouse taken away).
+        /// </summary>
+        public event EventHandler<FluentTabDragOutsideEventArgs> TabDragOutside;
 
-        /// <summary>Raised on the target window when a tab dragged from another window is dropped on its strip.</summary>
-        public event EventHandler<FluentTabDroppedEventArgs> TabDroppedFromOtherWindow;
+        // The dragged tab is outside the strip (host mode).
+        private bool _dragOutside;
+        private DragEscapeFilter _escapeFilter;
 
         /// <summary>The tab being dragged on this strip, or null.</summary>
         public FluentTab DraggedTab => _dragging && _dragIndex >= 0 && _dragIndex < _tabs.Count ? _tabs[_dragIndex] : null;
@@ -306,24 +311,44 @@ namespace FluentChromeTabs
 
         private void ContinueDrag(Point p)
         {
-            // Dropping onto another FluentChromeTabsForm's strip transfers the tab there
-            if (AllowTabDetach && TryTransferToOtherWindow())
+            if (HostMovesTabsBetweenWindows && AllowTabDetach)
             {
-                return;
-            }
-
-            // Leaving the strip vertically tears the tab off into its own window
-            if (AllowTabDetach && (p.Y < -Dpi(DetachThreshold) || p.Y > StripHeightPx + Dpi(DetachThreshold)))
-            {
-                if (HostMovesTabsBetweenWindows && TabTornOff != null)
+                // Off the strip (either side of it, or beyond the window): the host takes the
+                // drag from here until the tab comes back or is let go.
+                bool outside = p.Y < -Dpi(DetachThreshold) || p.Y > StripHeightPx + Dpi(DetachThreshold)
+                    || p.X < 0 || p.X >= ClientSize.Width;
+                if (outside)
                 {
-                    TearOffForHost();
+                    FluentTabDragPhase phase = _dragOutside ? FluentTabDragPhase.Moved : FluentTabDragPhase.Started;
+                    if (!_dragOutside)
+                    {
+                        _dragOutside = true;
+                        _escapeFilter = new DragEscapeFilter(this);
+                        Application.AddMessageFilter(_escapeFilter);
+                    }
+                    RaiseDragOutside(phase);
+                    return;
                 }
-                else
+                if (_dragOutside)
+                {
+                    StopDragOutside();
+                    RaiseDragOutside(FluentTabDragPhase.Returned);
+                }
+            }
+            else
+            {
+                // Dropping onto another FluentChromeTabsForm's strip transfers the tab there
+                if (AllowTabDetach && TryTransferToOtherWindow())
+                {
+                    return;
+                }
+
+                // Leaving the strip vertically tears the tab off into its own window
+                if (AllowTabDetach && (p.Y < -Dpi(DetachThreshold) || p.Y > StripHeightPx + Dpi(DetachThreshold)))
                 {
                     DetachDraggedTab();
+                    return;
                 }
-                return;
             }
 
             // Split strip: crossing the divider moves the dragged tab into the other region.
@@ -375,48 +400,82 @@ namespace FluentChromeTabs
             InvalidateStrip();
         }
 
-        /// <summary>The mouse was released mid-drag: report a tab that arrived from another window, then end the drag.</summary>
+        /// <summary>The mouse was released mid-drag: outside the strip, the host gets the drop.</summary>
         private void FinishDrop()
         {
-            FluentChromeTabsForm origin = _dragOrigin;
-            FluentTab dropped = DraggedTab;
-            int position = dropped == null ? -1 : GroupPosition(_dragIndex);
-
-            EndDrag();
-
-            if (dropped != null && origin != null && origin != this)
+            if (_dragOutside)
             {
-                origin._tabAwayInDrag = null;
-                TabDroppedFromOtherWindow?.Invoke(this, new FluentTabDroppedEventArgs(dropped, origin, position));
-            }
-        }
-
-        /// <summary>
-        /// Host mode: the tab left the strip. The only tab of the window it started in moves that
-        /// window, as without a host; any other tab leaves the strip and the host opens its window.
-        /// </summary>
-        private void TearOffForHost()
-        {
-            FluentTab tab = _tabs[_dragIndex];
-            FluentChromeTabsForm origin = _dragOrigin ?? this;
-            Point screenCursor = Cursor.Position;
-            Size size = NativeMethods.IsZoomed(Handle) ? RestoreBounds.Size : Size;
-            Rectangle bounds = new Rectangle(
-                new Point(screenCursor.X - _dragOffsetX - GroupTabsLeftPx(0), screenCursor.Y - StripHeightPx / 2), size);
-
-            EndDrag();
-            Capture = false;
-            _mouseDownTab = -1;
-
-            if (origin == this && _tabs.Count == 1)
-            {
-                BeginWindowMoveWithCursor();
+                FluentTab dropped = DraggedTab;
+                StopDragOutside();
+                EndDrag();
+                Capture = false;
+                if (dropped != null)
+                {
+                    TabDragOutside?.Invoke(this, new FluentTabDragOutsideEventArgs(dropped, Cursor.Position, FluentTabDragPhase.Dropped));
+                }
                 return;
             }
 
-            DetachTabCore(tab);
-            origin._tabAwayInDrag = null;
-            TabTornOff?.Invoke(this, new FluentTabTornOffEventArgs(tab, origin, screenCursor, bounds));
+            EndDrag();
+        }
+
+        /// <summary>The drag outside the strip is given up (Escape, or the mouse was taken away).</summary>
+        internal void CancelDragOutside()
+        {
+            if (!_dragging || !_dragOutside) return;
+            FluentTab dragged = DraggedTab;
+            StopDragOutside();
+            EndDrag();
+            Capture = false;
+            _mouseDownTab = -1;
+            if (dragged != null)
+            {
+                TabDragOutside?.Invoke(this, new FluentTabDragOutsideEventArgs(dragged, Cursor.Position, FluentTabDragPhase.Cancelled));
+            }
+        }
+
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            if (!Capture) CancelDragOutside();
+        }
+
+        private void RaiseDragOutside(FluentTabDragPhase phase)
+        {
+            FluentTab dragged = DraggedTab;
+            if (dragged != null)
+            {
+                TabDragOutside?.Invoke(this, new FluentTabDragOutsideEventArgs(dragged, Cursor.Position, phase));
+            }
+        }
+
+        private void StopDragOutside()
+        {
+            _dragOutside = false;
+            if (_escapeFilter != null)
+            {
+                Application.RemoveMessageFilter(_escapeFilter);
+                _escapeFilter = null;
+            }
+        }
+
+        /// <summary>Escape gives up a drag outside the strip, wherever the keyboard focus is.</summary>
+        private sealed class DragEscapeFilter : IMessageFilter
+        {
+            private readonly FluentChromeTabsForm _form;
+
+            public DragEscapeFilter(FluentChromeTabsForm form)
+            {
+                _form = form;
+            }
+
+            public bool PreFilterMessage(ref Message m)
+            {
+                const int WM_KEYDOWN = 0x0100, VK_ESCAPE = 0x1B;
+                if (m.Msg != WM_KEYDOWN || m.WParam.ToInt32() != VK_ESCAPE) return false;
+                _form.BeginInvoke(new Action(_form.CancelDragOutside));
+                return true;
+            }
         }
 
         private void EndDrag()

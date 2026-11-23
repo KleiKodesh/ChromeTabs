@@ -231,6 +231,17 @@ namespace FluentChromeTabs
             // Lift the clip so the caption buttons paint in full.
             g.Restore(stripClip);
 
+            // Something dragged over the strip will land here: an accent outline around it.
+            if (_dropHintVisible)
+            {
+                Rectangle hint = new Rectangle(Dpi(2), Dpi(2), Math.Max(0, CaptionButtonsLeftPx - Dpi(6)), StripHeightPx - Dpi(4));
+                using (GraphicsPath path = RoundedRectPath(hint, TabRadiusPx))
+                using (Pen pen = new Pen(AccentColor ?? _palette.TextActive, Math.Max(2f, Dpi(2))))
+                {
+                    g.DrawPath(pen, path);
+                }
+            }
+
             DrawCaptionButton(g, NativeMethods.HTMINBUTTON);
             DrawCaptionButton(g, NativeMethods.HTMAXBUTTON);
             DrawCaptionButton(g, NativeMethods.HTCLOSE);

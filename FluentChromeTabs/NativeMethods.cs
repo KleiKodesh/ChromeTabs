@@ -159,5 +159,19 @@ namespace FluentChromeTabs
 
         [DllImport("user32.dll")]
         internal static extern IntPtr GetMessageExtraInfo();
+
+        internal const uint GW_HWNDNEXT = 2;
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetTopWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
+
+        [DllImport("user32.dll")]
+        internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        internal static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     }
 }

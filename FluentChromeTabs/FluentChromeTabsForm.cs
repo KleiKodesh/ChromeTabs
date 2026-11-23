@@ -1804,6 +1804,12 @@ namespace FluentChromeTabs
         /// size, because the active tab is wider than the rest, so a uniform division
         /// drifts by that difference for every position after it.
         /// </summary>
+        /// <summary>Where a tab dropped at <paramref name="screenPoint" /> would land among this strip's tabs.</summary>
+        public int DropIndexAtScreenPoint(Point screenPoint)
+        {
+            return DropIndexAtPx(0, PointToClient(screenPoint).X);
+        }
+
         private int DropIndexAtPx(int group, int xPx)
         {
             int left = GroupTabsClipRect(group).Left - ScrollOffsetPx(group);
@@ -2192,6 +2198,58 @@ namespace FluentChromeTabs
             get { return OpenTabForms.Count; }
         }
 
+        /// <summary>How many strip heights below the strip still count as dropping onto it.</summary>
+        public const int StripDropSlackFactor = 2;
+
+        /// <summary>
+        /// Marks the strip as a drop target: something dragged over it (another window) will
+        /// land here as a tab when released. The host turns it on and off as the drag moves.
+        /// </summary>
+        public bool DropHintVisible
+        {
+            get { return _dropHintVisible; }
+            set
+            {
+                if (_dropHintVisible == value) return;
+                _dropHintVisible = value;
+                InvalidateStrip();
+            }
+        }
+
+        private bool _dropHintVisible;
+
+        /// <summary>
+        /// The window whose tab strip is visible at <paramref name="screenPoint" />, looking
+        /// past <paramref name="ignore" /> (the window being dragged, which is itself under the
+        /// cursor): the topmost window there, so a strip covered by another window is not
+        /// found. Null when there is none. For a host that lets windows be dropped onto a strip.
+        /// The target reaches <see cref="StripDropSlackFactor" /> strip heights below the strip:
+        /// the strip alone is a thin line to hit with a whole window in hand, and on a maximized
+        /// window it touches the screen's top edge, where Windows starts its own Snap.
+        /// </summary>
+        public static FluentChromeTabsForm FormWithStripAt(Point screenPoint, IntPtr ignore)
+        {
+            for (IntPtr h = NativeMethods.GetTopWindow(IntPtr.Zero); h != IntPtr.Zero; h = NativeMethods.GetWindow(h, NativeMethods.GW_HWNDNEXT))
+            {
+                if (h == ignore || !NativeMethods.IsWindowVisible(h)) continue;
+                NativeMethods.RECT r;
+                if (!NativeMethods.GetWindowRect(h, out r)) continue;
+                if (screenPoint.X < r.left || screenPoint.X >= r.right || screenPoint.Y < r.top || screenPoint.Y >= r.bottom) continue;
+
+                // The topmost window at the point: ours with its strip there, or nothing.
+                foreach (FluentChromeTabsForm form in OpenTabForms)
+                {
+                    if (form.IsDisposed || !form.IsHandleCreated || form.Handle != h || form.WindowState == FormWindowState.Minimized) continue;
+                    Point local = form.PointToClient(screenPoint);
+                    int reach = form.StripHeightPx * (1 + StripDropSlackFactor);
+                    return local.Y >= 0 && local.Y < reach && local.X >= 0 && local.X < form.ClientSize.Width ? form : null;
+                }
+                return null;
+            }
+
+            return null;
+        }
+
         /// <summary>Raised after any <see cref="FluentChromeTabsForm" /> in the process closes. Used by <see cref="FluentChromeTabsApplicationContext" />.</summary>
         public static event EventHandler WindowClosed;
 
@@ -2242,6 +2300,20 @@ namespace FluentChromeTabs
                 {
                     EnsureTabVisible(i);
                 }
+            }
+        }
+
+        /// <summary>
+        /// The narrowest this window can be made (device pixels, window coordinates): what the
+        /// strip needs, or the system's minimum. For a host placing windows side by side.
+        /// </summary>
+        public int MinimumWindowWidthPx
+        {
+            get
+            {
+                int system = SystemInformation.MinimumWindowSize.Width;
+                if (!StripVisible || _minVisibleTabs <= 0 || !IsHandleCreated || ClientSize.Width <= 0) return system;
+                return Math.Max(system, MinClientWidthPx + Math.Max(0, Width - ClientSize.Width));
             }
         }
 

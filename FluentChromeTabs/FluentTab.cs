@@ -187,44 +187,34 @@ namespace FluentChromeTabs
         /// <summary>The region the tab was dragged into (0 = primary / inline start, 1 = secondary).</summary>
         public int Group { get; }
     }
-    /// <summary>
-    /// A tab dragged off the strip while <see cref="FluentChromeTabsForm.HostMovesTabsBetweenWindows" /> is on.
-    /// The library has ended its drag and taken the label off the strip; the host opens the new window.
-    /// </summary>
-    public class FluentTabTornOffEventArgs : FluentTabEventArgs
+    /// <summary>What happened to a tab dragged outside its strip.</summary>
+    public enum FluentTabDragPhase
     {
-        public FluentTabTornOffEventArgs(FluentTab tab, FluentChromeTabsForm origin, Point screenCursor, Rectangle suggestedBounds)
-            : base(tab)
-        {
-            Origin = origin;
-            ScreenCursor = screenCursor;
-            SuggestedBounds = suggestedBounds;
-        }
-
-        /// <summary>The window the tab was dragged from at the start (it may since have passed through other windows).</summary>
-        public FluentChromeTabsForm Origin { get; }
-
-        /// <summary>Where the cursor was when the tab tore off, in screen coordinates.</summary>
-        public Point ScreenCursor { get; }
-
-        /// <summary>Bounds that keep the grabbed point of the tab under the cursor, sized like the window it left.</summary>
-        public Rectangle SuggestedBounds { get; }
+        /// <summary>It just left the strip.</summary>
+        Started,
+        /// <summary>It moved, still outside.</summary>
+        Moved,
+        /// <summary>It came back over its strip, where it reorders again.</summary>
+        Returned,
+        /// <summary>The button was released outside the strip.</summary>
+        Dropped,
+        /// <summary>The drag was given up: Escape, or the mouse was taken away.</summary>
+        Cancelled,
     }
 
-    /// <summary>A tab from another window dropped onto this window's strip (the drag that brought it has ended).</summary>
-    public class FluentTabDroppedEventArgs : FluentTabEventArgs
+    /// <summary>A tab dragged outside its strip (<see cref="FluentChromeTabsForm.HostMovesTabsBetweenWindows" />).</summary>
+    public class FluentTabDragOutsideEventArgs : FluentTabEventArgs
     {
-        public FluentTabDroppedEventArgs(FluentTab tab, FluentChromeTabsForm origin, int position)
+        public FluentTabDragOutsideEventArgs(FluentTab tab, Point screenPoint, FluentTabDragPhase phase)
             : base(tab)
         {
-            Origin = origin;
-            Position = position;
+            ScreenPoint = screenPoint;
+            Phase = phase;
         }
 
-        /// <summary>The window the tab was dragged from.</summary>
-        public FluentChromeTabsForm Origin { get; }
+        /// <summary>The cursor, in screen coordinates.</summary>
+        public Point ScreenPoint { get; }
 
-        /// <summary>Where it landed among the first region's tabs.</summary>
-        public int Position { get; }
+        public FluentTabDragPhase Phase { get; }
     }
 }
