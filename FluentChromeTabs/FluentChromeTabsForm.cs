@@ -392,6 +392,12 @@ namespace FluentChromeTabs
         /// <summary>Raised when the selected tab changes.</summary>
         public event EventHandler<FluentTabEventArgs> SelectedTabChanged;
 
+        /// <summary>
+        /// Raised on every left press on a tab's body, also when it is already the selected tab
+        /// (which <see cref="SelectedTabChanged" /> does not report).
+        /// </summary>
+        public event EventHandler<FluentTabEventArgs> TabPressed;
+
         /// <summary>Raised when the user requests a new tab (the "+" button or Ctrl+T).</summary>
         public event EventHandler<NewTabRequestedEventArgs> NewTabRequested;
 

@@ -23,6 +23,45 @@ namespace FluentChromeTabs
 
         private bool _dividerDragging;
 
+        // The window a drag started in. A drag dropped onto another window continues there,
+        // so the target needs to know where the tab came from.
+        private FluentChromeTabsForm _dragOrigin;
+
+        // On the origin window: its tab, while the drag carrying it is in another window.
+        private FluentTab _tabAwayInDrag;
+
+        /// <summary>
+        /// When true, a host moves tabs between windows itself (its tabs stand for content the
+        /// library cannot move). The drag looks and feels the same, but its outcome is reported
+        /// instead of applied: <see cref="TabTornOff" /> replaces opening a window of this type,
+        /// and <see cref="TabDroppedFromOtherWindow" /> tells the target what arrived. Dragging a
+        /// window's only tab drags the tab (so it can be dropped onto another window) until it
+        /// leaves the strip, then the window moves. Needs <see cref="AllowTabDetach" />.
+        /// </summary>
+        public bool HostMovesTabsBetweenWindows { get; set; }
+
+        /// <summary>Raised when a tab is dragged off the strip while <see cref="HostMovesTabsBetweenWindows" /> is on.</summary>
+        public event EventHandler<FluentTabTornOffEventArgs> TabTornOff;
+
+        /// <summary>Raised on the target window when a tab dragged from another window is dropped on its strip.</summary>
+        public event EventHandler<FluentTabDroppedEventArgs> TabDroppedFromOtherWindow;
+
+        /// <summary>The tab being dragged on this strip, or null.</summary>
+        public FluentTab DraggedTab => _dragging && _dragIndex >= 0 && _dragIndex < _tabs.Count ? _tabs[_dragIndex] : null;
+
+        /// <summary>The window the tab being dragged here came from (this one for a drag that started here), or null.</summary>
+        public FluentChromeTabsForm DraggedTabOrigin => _dragging ? _dragOrigin : null;
+
+        /// <summary>This window's tab while a drag carries it over another window, else null.</summary>
+        public FluentTab TabAwayInDrag => _tabAwayInDrag;
+
+        /// <summary>Hands the pressed mouse button over to a native move of this window (as dragging a caption).</summary>
+        public void BeginWindowMoveWithCursor()
+        {
+            NativeMethods.ReleaseCapture();
+            NativeMethods.SendMessage(Handle, NativeMethods.WM_NCLBUTTONDOWN, new IntPtr(NativeMethods.HTCAPTION), IntPtr.Zero);
+        }
+
         /// <summary>How far the cursor may leave the strip vertically before the tab tears off, in logical pixels.</summary>
         private const int DetachThreshold = 36;
 
@@ -81,7 +120,9 @@ namespace FluentChromeTabs
 
                     if (!_mouseDownOnClose)
                     {
+                        FluentTab pressed = _tabs[tab];
                         SelectTabCore(tab);
+                        TabPressed?.Invoke(this, new FluentTabEventArgs(pressed));
                     }
                 }
                 else
@@ -201,7 +242,7 @@ namespace FluentChromeTabs
             }
             else if (_dragging)
             {
-                EndDrag();
+                FinishDrop();
             }
             else if (_mouseDownTab >= 0 && _mouseDownOnClose && e.Button == MouseButtons.Left)
             {
@@ -241,8 +282,10 @@ namespace FluentChromeTabs
             StopReflowAnimation();
             StopScrollGlide();
 
-            // Dragging the only tab of a window drags the whole window, like Chrome
-            if (_tabs.Count == 1)
+            // Dragging the only tab of a window drags the whole window, like Chrome. A host
+            // moving tabs itself lets it be dropped onto another window first (ContinueDrag
+            // moves the window once it leaves the strip).
+            if (_tabs.Count == 1 && !HostMovesTabsBetweenWindows)
             {
                 _mouseDownTab = -1;
                 NativeMethods.ReleaseCapture();
@@ -251,6 +294,7 @@ namespace FluentChromeTabs
             }
 
             _dragging = true;
+            _dragOrigin = this;
             _dragIndex = _mouseDownTab;
             _dragStartGroup = GroupOf(_tabs[_dragIndex]);
             _dragOffsetX = _mouseDownPoint.X - TabRect(_dragIndex).Left;
@@ -271,7 +315,14 @@ namespace FluentChromeTabs
             // Leaving the strip vertically tears the tab off into its own window
             if (AllowTabDetach && (p.Y < -Dpi(DetachThreshold) || p.Y > StripHeightPx + Dpi(DetachThreshold)))
             {
-                DetachDraggedTab();
+                if (HostMovesTabsBetweenWindows && TabTornOff != null)
+                {
+                    TearOffForHost();
+                }
+                else
+                {
+                    DetachDraggedTab();
+                }
                 return;
             }
 
@@ -324,6 +375,50 @@ namespace FluentChromeTabs
             InvalidateStrip();
         }
 
+        /// <summary>The mouse was released mid-drag: report a tab that arrived from another window, then end the drag.</summary>
+        private void FinishDrop()
+        {
+            FluentChromeTabsForm origin = _dragOrigin;
+            FluentTab dropped = DraggedTab;
+            int position = dropped == null ? -1 : GroupPosition(_dragIndex);
+
+            EndDrag();
+
+            if (dropped != null && origin != null && origin != this)
+            {
+                origin._tabAwayInDrag = null;
+                TabDroppedFromOtherWindow?.Invoke(this, new FluentTabDroppedEventArgs(dropped, origin, position));
+            }
+        }
+
+        /// <summary>
+        /// Host mode: the tab left the strip. The only tab of the window it started in moves that
+        /// window, as without a host; any other tab leaves the strip and the host opens its window.
+        /// </summary>
+        private void TearOffForHost()
+        {
+            FluentTab tab = _tabs[_dragIndex];
+            FluentChromeTabsForm origin = _dragOrigin ?? this;
+            Point screenCursor = Cursor.Position;
+            Size size = NativeMethods.IsZoomed(Handle) ? RestoreBounds.Size : Size;
+            Rectangle bounds = new Rectangle(
+                new Point(screenCursor.X - _dragOffsetX - GroupTabsLeftPx(0), screenCursor.Y - StripHeightPx / 2), size);
+
+            EndDrag();
+            Capture = false;
+            _mouseDownTab = -1;
+
+            if (origin == this && _tabs.Count == 1)
+            {
+                BeginWindowMoveWithCursor();
+                return;
+            }
+
+            DetachTabCore(tab);
+            origin._tabAwayInDrag = null;
+            TabTornOff?.Invoke(this, new FluentTabTornOffEventArgs(tab, origin, screenCursor, bounds));
+        }
+
         private void EndDrag()
         {
             // Report a cross-region move to the host once, on drop. The tab's group was
@@ -341,6 +436,7 @@ namespace FluentChromeTabs
 
             _dragging = false;
             _dragIndex = -1;
+            _dragOrigin = null;
             InvalidateStrip();
         }
 
@@ -427,6 +523,7 @@ namespace FluentChromeTabs
 
                 FluentTab tab = _tabs[_dragIndex];
                 int offset = _dragOffsetX;
+                FluentChromeTabsForm origin = _dragOrigin ?? this;
 
                 EndDrag();
                 Capture = false;
@@ -446,13 +543,16 @@ namespace FluentChromeTabs
 
                 // Continue the drag inside the target window
                 candidate._dragging = true;
+                candidate._dragOrigin = origin;
+                origin._tabAwayInDrag = candidate == origin ? null : tab;
                 candidate._dragIndex = candidate._tabs.IndexOf(tab);
                 candidate._dragOffsetX = Math.Min(offset, candidate.TabWidthPx(candidate._dragIndex, 0) - Dpi(16));
                 candidate._dragVisualX = local.X - candidate._dragOffsetX;
                 candidate.Capture = true;
                 candidate.InvalidateStrip();
 
-                if (_tabs.Count == 0 && ExitOnLastTabClose)
+                // A host moving tabs decides itself what becomes of a window left empty.
+                if (_tabs.Count == 0 && ExitOnLastTabClose && !HostMovesTabsBetweenWindows)
                 {
                     BeginInvoke(new Action(Close));
                 }

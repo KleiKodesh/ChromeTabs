@@ -133,6 +133,8 @@ namespace FluentChromeTabs
         public object Tag { get; set; }
     }
 
+
+
     /// <summary>Event arguments carrying the tab an event relates to.</summary>
     public class FluentTabEventArgs : EventArgs
     {
@@ -184,5 +186,45 @@ namespace FluentChromeTabs
 
         /// <summary>The region the tab was dragged into (0 = primary / inline start, 1 = secondary).</summary>
         public int Group { get; }
+    }
+    /// <summary>
+    /// A tab dragged off the strip while <see cref="FluentChromeTabsForm.HostMovesTabsBetweenWindows" /> is on.
+    /// The library has ended its drag and taken the label off the strip; the host opens the new window.
+    /// </summary>
+    public class FluentTabTornOffEventArgs : FluentTabEventArgs
+    {
+        public FluentTabTornOffEventArgs(FluentTab tab, FluentChromeTabsForm origin, Point screenCursor, Rectangle suggestedBounds)
+            : base(tab)
+        {
+            Origin = origin;
+            ScreenCursor = screenCursor;
+            SuggestedBounds = suggestedBounds;
+        }
+
+        /// <summary>The window the tab was dragged from at the start (it may since have passed through other windows).</summary>
+        public FluentChromeTabsForm Origin { get; }
+
+        /// <summary>Where the cursor was when the tab tore off, in screen coordinates.</summary>
+        public Point ScreenCursor { get; }
+
+        /// <summary>Bounds that keep the grabbed point of the tab under the cursor, sized like the window it left.</summary>
+        public Rectangle SuggestedBounds { get; }
+    }
+
+    /// <summary>A tab from another window dropped onto this window's strip (the drag that brought it has ended).</summary>
+    public class FluentTabDroppedEventArgs : FluentTabEventArgs
+    {
+        public FluentTabDroppedEventArgs(FluentTab tab, FluentChromeTabsForm origin, int position)
+            : base(tab)
+        {
+            Origin = origin;
+            Position = position;
+        }
+
+        /// <summary>The window the tab was dragged from.</summary>
+        public FluentChromeTabsForm Origin { get; }
+
+        /// <summary>Where it landed among the first region's tabs.</summary>
+        public int Position { get; }
     }
 }
