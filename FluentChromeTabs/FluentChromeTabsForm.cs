@@ -2232,6 +2232,8 @@ namespace FluentChromeTabs
             for (IntPtr h = NativeMethods.GetTopWindow(IntPtr.Zero); h != IntPtr.Zero; h = NativeMethods.GetWindow(h, NativeMethods.GW_HWNDNEXT))
             {
                 if (h == ignore || !NativeMethods.IsWindowVisible(h)) continue;
+                // A window the mouse passes through (a host's drop preview, an overlay) hides nothing.
+                if ((NativeMethods.GetWindowLongInt(h, NativeMethods.GWL_EXSTYLE_INDEX) & NativeMethods.WS_EX_TRANSPARENT) != 0) continue;
                 NativeMethods.RECT r;
                 if (!NativeMethods.GetWindowRect(h, out r)) continue;
                 if (screenPoint.X < r.left || screenPoint.X >= r.right || screenPoint.Y < r.top || screenPoint.Y >= r.bottom) continue;
@@ -2260,6 +2262,7 @@ namespace FluentChromeTabs
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
+            if (ScreenDockingAttached) ScreenDocking.OnDockedWindowResized(this);
 
             // Narrowing the window shrinks the tabs and shortens the scrollable band, which
             // can leave the active tab parked outside it — the user drags the edge in and

@@ -325,6 +325,14 @@ namespace FluentChromeTabs
                         _dragOutside = true;
                         _escapeFilter = new DragEscapeFilter(this);
                         Application.AddMessageFilter(_escapeFilter);
+                        NativeMethods.GetAsyncKeyState(VK_ESCAPE); // forget a press from before the drag
+                    }
+                    // Escape pressed while the keyboard is with another window (the filter only
+                    // sees this thread's keys): read from the keyboard itself.
+                    else if ((NativeMethods.GetAsyncKeyState(VK_ESCAPE) & 0x8001) != 0)
+                    {
+                        CancelDragOutside();
+                        return;
                     }
                     RaiseDragOutside(phase);
                     return;
@@ -458,6 +466,8 @@ namespace FluentChromeTabs
                 _escapeFilter = null;
             }
         }
+
+        private const int VK_ESCAPE = 0x1B;
 
         /// <summary>Escape gives up a drag outside the strip, wherever the keyboard focus is.</summary>
         private sealed class DragEscapeFilter : IMessageFilter

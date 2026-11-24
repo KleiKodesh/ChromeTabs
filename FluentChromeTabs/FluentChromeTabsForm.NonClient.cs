@@ -51,6 +51,17 @@ namespace FluentChromeTabs
 
         protected override void WndProc(ref Message m)
         {
+            // Screen docking (optional, ScreenDocking.Attach) sees the move, size and order messages.
+            if (ScreenDockingAttached) ScreenDocking.BeforeWindowMessage(this, ref m);
+            WndProcCore(ref m);
+            if (ScreenDockingAttached) ScreenDocking.AfterWindowMessage(this, ref m);
+        }
+
+        /// <summary>Set by ScreenDocking.Attach: this window takes part in screen docking.</summary>
+        internal bool ScreenDockingAttached { get; set; }
+
+        private void WndProcCore(ref Message m)
+        {
             // Snapshot the real Normal bounds as the window leaves Normal for Minimized,
             // and arm the post-restore correction when it comes back.
             if (m.Msg == NativeMethods.WM_SIZE)
