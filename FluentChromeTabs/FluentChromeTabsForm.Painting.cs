@@ -796,6 +796,8 @@ namespace FluentChromeTabs
 
         private void PlaceStripToolTip(string text, Rectangle anchorClientRect)
         {
+            // The window may have closed while the tip waited for its delay.
+            if (IsDisposed || Disposing || !IsHandleCreated) return;
             if (IsTabContextMenuOpen || IsTabListOpen)
             {
                 return;

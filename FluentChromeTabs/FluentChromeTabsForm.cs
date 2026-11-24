@@ -2357,6 +2357,8 @@ namespace FluentChromeTabs
             // BeginInvoke), so the timers would keep ticking against a torn-down form.
             StopReflowAnimation();
             StopScrollGlide();
+            // A tooltip waiting for its delay must not show for a window that is gone.
+            _toolTipDelay?.Stop();
 
             base.OnHandleDestroyed(e);
         }
@@ -2404,6 +2406,7 @@ namespace FluentChromeTabs
                 _windowIconBitmap?.Dispose();
                 _reflowTimer?.Dispose();
                 _scrollGlideTimer?.Dispose();
+                _toolTipDelay?.Dispose();
             }
 
             base.Dispose(disposing);
