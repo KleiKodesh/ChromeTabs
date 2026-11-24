@@ -21,10 +21,16 @@ namespace FluentChromeTabs
         /// Opens a new window holding the tab, and calls <paramref name="place"/> with it once it is
         /// shown (the library docks or positions it). The new window must be attached too.
         /// </summary>
-        void OpenWindowForTab(FluentChromeTabsForm source, FluentTab tab, Action<FluentChromeTabsForm> place);
+        void OpenWindowForTab(FluentChromeTabsForm source, FluentTab tab, Action<System.Windows.Forms.Form> place);
 
         /// <summary>True while the window may take tabs and a place (false while it closes, say).</summary>
-        bool AcceptsDrops(FluentChromeTabsForm window);
+        bool AcceptsDrops(System.Windows.Forms.Form window);
+
+        /// <summary>
+        /// A tool window (AttachWindow) let go on a tab strip, or with no place left on its screen:
+        /// it becomes a tab of <paramref name="target"/> (the host opens it there and closes the window).
+        /// </summary>
+        void MergeIntoTabs(System.Windows.Forms.Form window, FluentChromeTabsForm target);
 
         /// <summary>How many tabs the window really has (a host's strip may still be catching up).</summary>
         int TabCount(FluentChromeTabsForm window);

@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace FluentChromeTabs
@@ -39,7 +42,7 @@ namespace FluentChromeTabs
         {
             // A: the first along the slot's own line (top in columns, left in rows); B: the other,
             // or null when A fills the slot.
-            public FluentChromeTabsForm A, B;
+            public Form A, B;
             public double Split = 0.5;
             public bool IsEmpty => A == null && B == null;
         }
@@ -56,7 +59,7 @@ namespace FluentChromeTabs
         private static readonly List<SnapGroup> SnapGroups = new List<SnapGroup>();
 
         // Each docked window's size and place before it docked: it gets them back when dragged out.
-        private static readonly Dictionary<FluentChromeTabsForm, Rectangle> PreDockBounds = new Dictionary<FluentChromeTabsForm, Rectangle>();
+        private static readonly Dictionary<Form, Rectangle> PreDockBounds = new Dictionary<Form, Rectangle>();
 
         private static Screen ScreenByName(string name)
         {
@@ -109,7 +112,9 @@ namespace FluentChromeTabs
         private static Rectangle RectOf(SnapGroup group, int slot, int part)
         {
             SnapSlot s = group.Slots[slot];
-            return CellRect(group.Area, group.Rows, group.Split, s.Split, slot, s.B == null ? -1 : part);
+            // A half left empty (its window closed, minimized or gone) gives its space to the other.
+            double split = group.Slots[slot == 0 ? 1 : 0].IsEmpty ? (slot == 0 ? 1.0 : 0.0) : group.Split;
+            return CellRect(group.Area, group.Rows, split, s.Split, slot, s.B == null ? -1 : part);
         }
 
         // A screen's cell as it would be now: with that screen's group's lines when its group
@@ -123,7 +128,7 @@ namespace FluentChromeTabs
             return CellRect(screen.WorkingArea, rows, same ? group.Split : 0.5, same ? group.Slots[slot].Split : 0.5, slot, part);
         }
 
-        private static SnapGroup GroupOf(FluentChromeTabsForm window, out int slot, out int part)
+        private static SnapGroup GroupOf(Form window, out int slot, out int part)
         {
             foreach (SnapGroup group in SnapGroups)
                 for (int i = 0; i < 2; i++)
@@ -136,12 +141,12 @@ namespace FluentChromeTabs
             return null;
         }
 
-        private static bool IsDocked(FluentChromeTabsForm window) => GroupOf(window, out _, out _) != null;
+        private static bool IsDocked(Form window) => GroupOf(window, out _, out _) != null;
 
         // ── Docking ─────────────────────────────────────────────────────────────
 
         /// <summary>Docks a window into a cell of a screen; whatever held that cell is let go where it is.</summary>
-        private static void DockToScreen(FluentChromeTabsForm window, Screen screen, SnapCell cell)
+        private static void DockToScreen(Form window, Screen screen, SnapCell cell)
         {
             if (window.IsDisposed) return;
             // The size to go back to: from before it first docked, kept through a re-dock.
@@ -177,7 +182,7 @@ namespace FluentChromeTabs
             else if (slot.A != null && slot.B == null)
             {
                 // The half there becomes the other quarter.
-                FluentChromeTabsForm half = slot.A;
+                Form half = slot.A;
                 if (part == 0) { slot.A = window; slot.B = half; }
                 else slot.B = window;
                 slot.Split = 0.5;
@@ -201,7 +206,7 @@ namespace FluentChromeTabs
         /// its slot, an empty slot beside it is taken; a window not docked makes the screen two
         /// halves with it. False when that place cannot be had (a quarter is not split again).
         /// </summary>
-        private static bool CanDockBeside(FluentChromeTabsForm target, DropSide side, out Screen screen, out SnapCell cell, out SnapCell targetCell)
+        private static bool CanDockBeside(Form target, DropSide side, out Screen screen, out SnapCell cell, out SnapCell targetCell)
         {
             screen = Screen.FromHandle(target.Handle);
             SnapGroup group = GroupOf(target, out int slot, out int part);
@@ -231,11 +236,16 @@ namespace FluentChromeTabs
             return group.Rows ? s.Width / 2 >= MinDockedWidth : s.Height / 2 >= MinDockedHeight;
         }
 
-        private static bool HalfFits(Rectangle area, bool rows, FluentChromeTabsForm window)
+        private static bool HalfFits(Rectangle area, bool rows, Form window)
             => rows ? area.Height / 2 >= Math.Max(MinDockedHeight, SystemInformation.MinimumWindowSize.Height)
-                    : area.Width / 2 >= Math.Max(MinDockedWidth, window.MinimumWindowWidthPx);
+                    : area.Width / 2 >= Math.Max(MinDockedWidth, MinimumWidthOf(window));
 
-        private static void DockBeside(FluentChromeTabsForm window, FluentChromeTabsForm target, DropSide side)
+        // The narrowest a window can be made: its strip's need, or its own minimum.
+        private static int MinimumWidthOf(Form window)
+            => (window as FluentChromeTabsForm)?.MinimumWindowWidthPx
+               ?? Math.Max(window.MinimumSize.Width, SystemInformation.MinimumWindowSize.Width);
+
+        private static void DockBeside(Form window, Form target, DropSide side)
         {
             if (window.IsDisposed || target.IsDisposed) return;
             if (!CanDockBeside(target, side, out Screen screen, out SnapCell cell, out SnapCell targetCell)) return;
@@ -244,7 +254,7 @@ namespace FluentChromeTabs
         }
 
         /// <summary>Where a window dropped at that side of the target would land (the drop preview).</summary>
-        private static Rectangle? DockBesidePreview(FluentChromeTabsForm target, DropSide side)
+        private static Rectangle? DockBesidePreview(Form target, DropSide side)
         {
             if (!CanDockBeside(target, side, out Screen screen, out SnapCell cell, out _)) return null;
             SnapGroup group = GroupOf(target, out int slot, out _);
@@ -254,7 +264,7 @@ namespace FluentChromeTabs
         }
 
         // A window let go of its place by another taking it: it stays where it is, undocked.
-        private static void LetGo(FluentChromeTabsForm window)
+        private static void LetGo(Form window)
         {
             if (window == null) return;
             foreach (SnapGroup group in SnapGroups)
@@ -271,7 +281,7 @@ namespace FluentChromeTabs
         {
             foreach (SnapSlot slot in group.Slots)
             {
-                FluentChromeTabsForm a = slot.A, b = slot.B;
+                Form a = slot.A, b = slot.B;
                 LetGo(a);
                 LetGo(b);
             }
@@ -282,7 +292,7 @@ namespace FluentChromeTabs
         /// Takes a window out of its group (closed, or dragged out): its neighbour takes its
         /// place. True when it was docked.
         /// </summary>
-        private static bool Undock(FluentChromeTabsForm window, bool restoreSize)
+        private static bool Undock(Form window, bool restoreSize)
         {
             SnapGroup group = GroupOf(window, out int slotIndex, out _);
             if (group == null) return false;
@@ -305,8 +315,8 @@ namespace FluentChromeTabs
             int empty = group.Slots[0].IsEmpty ? 0 : group.Slots[1].IsEmpty ? 1 : -1;
             if (empty < 0) return;
             SnapSlot full = group.Slots[empty == 0 ? 1 : 0];
-            if (full.B == null) return; // a lone half stays a half, as Snap leaves it
-            FluentChromeTabsForm a = full.A, b = full.B;
+            if (full.B == null) return; // a lone window fills the screen meanwhile (RectOf); the empty half stays its to retake
+            Form a = full.A, b = full.B;
             group.Rows = !group.Rows;
             group.Split = full.Split;
             group.Slots[0].A = a; group.Slots[0].B = null; group.Slots[0].Split = 0.5;
@@ -324,7 +334,7 @@ namespace FluentChromeTabs
             KeepGroupShadowsHidden(group);
         }
 
-        private static void Place(FluentChromeTabsForm window, Rectangle cell)
+        private static void Place(Form window, Rectangle cell)
         {
             if (window == null || window.IsDisposed) return;
             SetSquareCorners(window, true);
@@ -333,7 +343,7 @@ namespace FluentChromeTabs
             SetVisibleBounds(window, cell);
         }
 
-        private static void SetSquareCorners(FluentChromeTabsForm window, bool square)
+        private static void SetSquareCorners(Form window, bool square)
         {
             if (window == null || window.IsDisposed || !window.IsHandleCreated) return;
             const int DONOTROUND = 1, DEFAULT = 0;
@@ -341,168 +351,13 @@ namespace FluentChromeTabs
             DwmSetWindowAttribute(window.Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref value, sizeof(int));
         }
 
-        // ── For hosts and tests: docking without a drag ──────────────────────────
-
-        /// <summary>Docks a window into a screen's half or quarter (as a tab dropped there would).</summary>
-        public static void Dock(FluentChromeTabsForm window, Screen screen, SnapCell cell)
-        {
-            DockToScreen(window, screen, cell);
-            TidyScreen(screen);
-        }
-
-        /// <summary>Docks a window at a side of another (as a tab dropped at that edge would).</summary>
-        public static void DockNextTo(FluentChromeTabsForm window, FluentChromeTabsForm target, DropSide side)
-        {
-            DockBeside(window, target, side);
-            TidyScreen(Screen.FromHandle(target.Handle));
-        }
-
-        /// <summary>The window's place: "free", or its cell and the lines of its group.</summary>
-        public static string Describe(FluentChromeTabsForm window)
-        {
-            SnapGroup g = GroupOf(window, out int slot, out int part);
-            if (g == null) return "free";
-            return "docked " + CellAt(g.Rows, slot, part) + " split=" + g.Split.ToString("0.00")
-                + " slotSplit=" + g.Slots[slot].Split.ToString("0.00") + " cell=" + RectOf(g, slot, part < 0 ? 0 : part);
-        }
-
-        /// <summary>How many screens hold a docked group.</summary>
-        public static int GroupCount => SnapGroups.Count;
-
-        /// <summary>What the eye sees of a window (its frame without the invisible resize borders).</summary>
-        public static Rectangle VisibleBoundsOf(Form form) => VisibleBounds(form);
-
-        /// <summary>An edge drag of a window (WMSZ_* edge) to the proposed rectangle: what it becomes; the others follow.</summary>
-        public static Rectangle ResizeEdge(FluentChromeTabsForm window, int edge, Rectangle proposed)
-        {
-            var r = new RECT { Left = proposed.Left, Top = proposed.Top, Right = proposed.Right, Bottom = proposed.Bottom };
-            OnWindowSizing(window, edge, ref r);
-            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
-        }
-
-        /// <summary>A title-bar move of a window to the proposed rectangle: what it becomes (a docked one leaves its place).</summary>
-        public static Rectangle MoveBy(FluentChromeTabsForm window, Rectangle proposed)
-        {
-            var r = new RECT { Left = proposed.Left, Top = proposed.Top, Right = proposed.Right, Bottom = proposed.Bottom };
-            OnWindowMovingRect(window, ref r);
-            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
-        }
-
-        // ── Never covering each other ───────────────────────────────────────────
-
-        // Our windows shown on a screen now (not minimized, not maximized, not hidden).
-        private static List<FluentChromeTabsForm> TileableWindowsOn(Screen screen, FluentChromeTabsForm except = null)
-        {
-            var list = new List<FluentChromeTabsForm>();
-            foreach (FluentChromeTabsForm w in AllAppWindows())
-                if (w != except && !w.IsDisposed && w.Visible && w.IsHandleCreated && w.WindowState == FormWindowState.Normal
-                    && IsDropTarget(w) && Screen.FromHandle(w.Handle).DeviceName == screen.DeviceName)
-                    list.Add(w);
-            return list;
-        }
-
-        /// <summary>
-        /// A window let go at <paramref name="cursor"/> (a tab dropped in an empty spot, a window
-        /// moved by its title bar): alone on its screen it stays where it is; otherwise it takes
-        /// the place nearest the cursor, and with none left joins the window under the cursor.
-        /// </summary>
-        private static void TileNear(FluentChromeTabsForm window, Point cursor)
-        {
-            if (window.IsDisposed) return;
-            Screen screen = Screen.FromPoint(cursor);
-            List<FluentChromeTabsForm> others = TileableWindowsOn(screen, window);
-            if (others.Count == 0) { TidyScreen(screen); return; }
-
-            FluentChromeTabsForm under = others.Find(w => VisibleBounds(w).Contains(cursor))
-                ?? others.OrderBy(w => DistanceTo(VisibleBounds(w), cursor)).First();
-            DropSide side = NearestSide(VisibleBounds(under), cursor);
-            if (TryDockBeside(window, under, side)) { TidyScreen(screen); return; }
-            foreach (DropSide other in new[] { DropSide.Left, DropSide.Right, DropSide.Top, DropSide.Bottom })
-                if (TryDockBeside(window, under, other)) { TidyScreen(screen); return; }
-            SnapGroup group = SnapGroups.Find(g => g.ScreenName == screen.DeviceName);
-            int empty = group == null ? -1 : group.Slots[0].IsEmpty ? 0 : group.Slots[1].IsEmpty ? 1 : -1;
-            if (empty >= 0) { DockToScreen(window, screen, CellAt(group.Rows, empty, -1)); TidyScreen(screen); return; }
-            // No place left: its tabs join the window under the cursor.
-            MergeAllTabs(window, under);
-        }
-
-        private static bool TryDockBeside(FluentChromeTabsForm window, FluentChromeTabsForm target, DropSide side)
-        {
-            if (!CanDockBeside(target, side, out _, out _, out _)) return false;
-            DockBeside(window, target, side);
-            return IsDocked(window);
-        }
-
-        /// <summary>
-        /// Every window shown on the screen that is not docked while others are takes a place
-        /// (an empty half, else a split of a half), or joins the largest window as tabs.
-        /// </summary>
-        private static void TidyScreen(Screen screen)
-        {
-            List<FluentChromeTabsForm> shown = TileableWindowsOn(screen);
-            if (shown.Count < 2) return;
-            foreach (FluentChromeTabsForm loose in shown.FindAll(w => !IsDocked(w)))
-            {
-                SnapGroup group = SnapGroups.Find(g => g.ScreenName == screen.DeviceName);
-                if (group == null)
-                {
-                    // Two loose windows: the screen becomes two halves, the other one on the side it is on.
-                    FluentChromeTabsForm other = shown.Find(w => w != loose && !IsDocked(w)) ?? shown.Find(w => w != loose);
-                    bool otherLeft = VisibleBounds(other).Left + VisibleBounds(other).Width / 2 <= VisibleBounds(loose).Left + VisibleBounds(loose).Width / 2;
-                    DockToScreen(other, screen, otherLeft ? SnapCell.Left : SnapCell.Right);
-                    if (loose == other) continue;
-                    DockToScreen(loose, screen, otherLeft ? SnapCell.Right : SnapCell.Left);
-                    continue;
-                }
-                if (IsDocked(loose)) continue;
-                int empty = group.Slots[0].IsEmpty ? 0 : group.Slots[1].IsEmpty ? 1 : -1;
-                if (empty >= 0) { DockToScreen(loose, screen, CellAt(group.Rows, empty, -1)); continue; }
-                int half = group.Slots[0].B == null ? 0 : group.Slots[1].B == null ? 1 : -1;
-                if (half >= 0 && CanDockBeside(group.Slots[half].A, group.Rows ? DropSide.Right : DropSide.Bottom, out _, out _, out _))
-                {
-                    DockBeside(loose, group.Slots[half].A, group.Rows ? DropSide.Right : DropSide.Bottom);
-                    continue;
-                }
-                FluentChromeTabsForm largest = shown.Where(IsDocked).OrderByDescending(w => VisibleBounds(w).Width * VisibleBounds(w).Height).First();
-                MergeAllTabs(loose, largest);
-            }
-        }
-
-        private static void MergeAllTabs(FluentChromeTabsForm source, FluentChromeTabsForm target)
-        {
-            var tabs = new List<FluentTab>(source.Tabs);
-            if (tabs.Count == 0 || target.IsDisposed) return;
-            source.BeginInvoke(new Action(() => { _ = MergeWindowIntoAsync(source, tabs, target, -1); }));
-            target.Activate();
-        }
-
-        private static double DistanceTo(Rectangle r, Point p)
-        {
-            int dx = Math.Max(Math.Max(r.Left - p.X, 0), p.X - r.Right), dy = Math.Max(Math.Max(r.Top - p.Y, 0), p.Y - r.Bottom);
-            return Math.Sqrt(dx * (double)dx + dy * (double)dy);
-        }
-
-        // The side of a rectangle nearest the point, by share of its width and height.
-        private static DropSide NearestSide(Rectangle r, Point p)
-        {
-            double x = (p.X - r.Left) / (double)Math.Max(1, r.Width), y = (p.Y - r.Top) / (double)Math.Max(1, r.Height);
-            double toLeft = x, toRight = 1 - x, toTop = y, toBottom = 1 - y;
-            double nearest = Math.Min(Math.Min(toLeft, toRight), Math.Min(toTop, toBottom));
-            if (nearest == toLeft) return DropSide.Left;
-            if (nearest == toRight) return DropSide.Right;
-            return nearest == toTop ? DropSide.Top : DropSide.Bottom;
-        }
-
-        // Minimized docked windows: their place, for when they come back.
-        private static readonly Dictionary<FluentChromeTabsForm, KeyValuePair<Screen, SnapCell>> MinimizedPlaces = new Dictionary<FluentChromeTabsForm, KeyValuePair<Screen, SnapCell>>();
-
         // ── The reader moves and resizes docked windows ──────────────────────────
 
         /// <summary>
         /// A docked window's edge is dragged (WM_SIZING): an inside edge moves the line it is on,
         /// and every window on that line follows; an outside edge stays on the screen's edge.
         /// </summary>
-        private static bool OnDockedWindowSizing(FluentChromeTabsForm window, int edge, ref RECT proposed)
+        private static bool OnDockedWindowSizing(Form window, int edge, ref RECT proposed)
         {
             SnapGroup group = GroupOf(window, out int slot, out int part);
             if (group == null) return false;
@@ -560,7 +415,7 @@ namespace FluentChromeTabs
         /// A docked window starts moving by its title bar (WM_MOVING): it leaves its group and
         /// gets back the size it had before it docked, under the cursor at the same share of its width.
         /// </summary>
-        private static void OnWindowMovingRect(FluentChromeTabsForm window, ref RECT proposed)
+        private static void OnWindowMovingRect(Form window, ref RECT proposed)
         {
             if (!IsDocked(window)) return;
             Rectangle before;
@@ -578,7 +433,7 @@ namespace FluentChromeTabs
         }
 
         /// <summary>A docked window was restored from maximized: back in its place.</summary>
-        internal static void OnDockedWindowResized(FluentChromeTabsForm window)
+        internal static void OnDockedWindowResized(Form window)
         {
             if (window.WindowState == FormWindowState.Minimized)
             {
@@ -608,7 +463,7 @@ namespace FluentChromeTabs
         // ── Shadows ─────────────────────────────────────────────────────────────
 
         // The window directly below this one in its group (its shadow would fall on it), or null.
-        private static FluentChromeTabsForm WindowBelow(FluentChromeTabsForm window)
+        private static Form WindowBelow(Form window)
         {
             SnapGroup group = GroupOf(window, out int slot, out int part);
             if (group == null) return null;
@@ -629,9 +484,9 @@ namespace FluentChromeTabs
         // strongest shadow downward, onto the window below it; kept directly beneath that window,
         // the shadow falls under it and is not seen. It stays the active window - only its place
         // in the window order changes.
-        private static void KeepUpperBelowLower(FluentChromeTabsForm window)
+        private static void KeepUpperBelowLower(Form window)
         {
-            FluentChromeTabsForm lower = window == null ? null : WindowBelow(window);
+            Form lower = window == null ? null : WindowBelow(window);
             if (lower == null || lower.IsDisposed || !lower.IsHandleCreated || !window.IsHandleCreated) return;
             const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
             SetWindowPos(window.Handle, lower.Handle, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
