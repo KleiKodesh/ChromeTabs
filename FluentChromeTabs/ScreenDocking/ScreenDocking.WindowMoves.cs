@@ -20,10 +20,12 @@ namespace FluentChromeTabs
         private static Form _movingWindow;
 
         // A window moved by its title bar reacts only over another of our windows: its strip takes
-        // the moved window's tabs, its edge zones dock the moved window beside it (with the same
-        // preview as a tab). Nothing else - no screen zones, no window middles - so an ordinary move
-        // stays an ordinary move. Let go elsewhere it stays where it was put, unless it covers
-        // another window; then it takes the nearest place.
+        // the moved window's tabs, a thin band along its edge docks the moved window beside it (with
+        // the same preview as a tab). Nothing else - no screen zones, no window middles, a band far
+        // thinner than a tab's - so an ordinary move stays an ordinary move. Let go elsewhere, the
+        // window stays exactly where it was put, even over another: a deliberate move wins.
+        private const double WindowMoveEdgeShare = 0.08;
+
         private static void OnWindowMoving(Form window)
         {
             _movingWindow = window;
@@ -40,7 +42,7 @@ namespace FluentChromeTabs
             Form under = OurWindowAt(cursor, self);
             if (under != null && under != window)
             {
-                DropSide? side = EdgeZone(VisibleBounds(under), cursor);
+                DropSide? side = EdgeZone(VisibleBounds(under), cursor, WindowMoveEdgeShare);
                 if (side.HasValue && DockBesidePreview(under, side.Value).HasValue)
                 {
                     SetDropTarget(DropKind.BesideWindow, under, side.Value, Rectangle.Empty);
@@ -102,13 +104,7 @@ namespace FluentChromeTabs
                     return;
 
                 default:
-                    // Where it was put - only a window that now covers another takes a place.
-                    Rectangle mine = VisibleBounds(window);
-                    bool covers = false;
-                    foreach (Form other in AllAppWindows())
-                        if (other != window && !other.IsDisposed && other.Visible && other.WindowState == FormWindowState.Normal
-                            && VisibleBounds(other).IntersectsWith(mine)) { covers = true; break; }
-                    if (covers) TileNear(window, cursor);
+                    // Where it was put: an ordinary move.
                     return;
             }
         }
