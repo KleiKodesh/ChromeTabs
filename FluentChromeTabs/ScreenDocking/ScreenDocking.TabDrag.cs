@@ -28,11 +28,11 @@ namespace FluentChromeTabs
         // places the tab beside it. The middle takes the tab in, like the strip.
         private const double DropZoneShare = 0.3;
         // The same for a screen, off the app: a smaller share, the screen being much larger.
-        private const double ScreenZoneShare = 0.2;
+        private const double ScreenZoneShare = 0.12;
 
         // IntoWindow: the middle of a window - the tab joins its tabs, at the end, as on its strip.
         // ScreenCell: a screen's half or quarter (ScreenDocking.Layout.cs).
-        private enum DropKind { None, Strip, IntoWindow, BesideWindow, ScreenCell }
+        private enum DropKind { None, Strip, IntoWindow, BesideWindow, ScreenCell, Free }
 
         // The tab drag in progress (one at a time: there is one mouse).
         private static TabDragGhost _ghost;
@@ -106,31 +106,14 @@ namespace FluentChromeTabs
         {
             IntPtr ghost = ignore;
 
-            // The very corner of a screen is that quarter, and a thin band along its edge that half,
-            // even over a docked window's strip or edge there.
+            // Shift held (as with Windows Snap): no zones - the tab goes exactly where it is let go.
+            if ((Control.ModifierKeys & Keys.Shift) != 0)
             {
-                Screen s = Screen.FromPoint(cursor);
-                Rectangle wa = s.WorkingArea;
-                double cx = (cursor.X - wa.Left) / (double)Math.Max(1, wa.Width), cy = (cursor.Y - wa.Top) / (double)Math.Max(1, wa.Height);
-                bool nearX = cx <= ScreenCornerTightShare || cx >= 1 - ScreenCornerTightShare;
-                bool nearY = cy <= ScreenCornerTightShare || cy >= 1 - ScreenCornerTightShare;
-                SnapCell? tight = nearX && nearY ? ScreenZone(wa, cursor) : null;
-                // A thin band along the screen's edge is that half, the same way.
-                if (!tight.HasValue)
-                {
-                    if (cx <= ScreenEdgeTightShare) tight = SnapCell.Left;
-                    else if (cx >= 1 - ScreenEdgeTightShare) tight = SnapCell.Right;
-                    else if (cy <= ScreenEdgeTightShare) tight = SnapCell.Top;
-                    else if (cy >= 1 - ScreenEdgeTightShare) tight = SnapCell.Bottom;
-                }
-                if (tight.HasValue)
-                {
-                    _dropCell = tight.Value;
-                    _dropScreen = s;
-                    SetDropTarget(DropKind.ScreenCell, null, DropSide.Left, ScreenCellRect(s, tight.Value));
-                    return;
-                }
+                SetDropTarget(DropKind.Free, null, DropSide.Left, Rectangle.Empty);
+                return;
             }
+
+            if (TryScreenEdgeTarget(cursor)) return;
 
             // Over a strip: the tab goes in there. Its own strip is where the drag came from.
             FluentChromeTabsForm strip = FluentChromeTabsForm.FormWithStripAt(cursor, ghost);
@@ -172,8 +155,18 @@ namespace FluentChromeTabs
                 // A tab joins only a window with a tab strip (a tool window has none).
                 else if (under != source && under is FluentChromeTabsForm && IsDropTarget(under))
                     SetDropTarget(DropKind.IntoWindow, under, DropSide.Left, Rectangle.Empty);
+                // Its own window away from the edges: it pops out as a window of its own, there.
+                else if (under == source && !alone)
+                    SetDropTarget(DropKind.Free, null, DropSide.Left, Rectangle.Empty);
                 else
                     SetDropTarget(DropKind.None, null, DropSide.Left, Rectangle.Empty);
+                return;
+            }
+
+            // Just outside one of our windows: free room to pop the tab out beside it, never a snap.
+            if (NearOurWindow(cursor, ghost))
+            {
+                SetDropTarget(DropKind.Free, null, DropSide.Left, Rectangle.Empty);
                 return;
             }
 
@@ -189,14 +182,59 @@ namespace FluentChromeTabs
                 return;
             }
 
-            SetDropTarget(DropKind.None, null, DropSide.Left, Rectangle.Empty);
+            // Open desktop, away from every zone: a window of its own right there, not docked.
+            SetDropTarget(DropKind.Free, null, DropSide.Left, Rectangle.Empty);
         }
 
         // How close to a screen's corner (a share of its width and of its height) gives a quarter.
-        private const double ScreenCornerShare = 0.12;
+        private const double ScreenCornerShare = 0.08;
         // The part of that which wins even over a tab strip reaching into the corner.
         private const double ScreenCornerTightShare = 0.04;
         private const double ScreenEdgeTightShare = 0.012;
+
+        // The free band around each of our windows, as a share of the screen's width.
+        private const double WindowPaddingShare = 0.08;
+
+        private static bool NearOurWindow(Point cursor, IntPtr ignore)
+        {
+            int pad = (int)(Screen.FromPoint(cursor).WorkingArea.Width * WindowPaddingShare);
+            foreach (Form window in AllAppWindows())
+            {
+                if (window.IsDisposed || !window.Visible || window.WindowState == FormWindowState.Minimized) continue;
+                if (window.IsHandleCreated && window.Handle == ignore) continue;
+                Rectangle around = VisibleBounds(window);
+                around.Inflate(pad, pad);
+                if (around.Contains(cursor)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The very corner of a screen is that quarter, and a thin band along its edge that half -
+        /// even over a docked window's strip or edge there, and for a window moved by its title bar
+        /// too: the band is wider than where Windows Snap starts, so ours comes first.
+        /// </summary>
+        private static bool TryScreenEdgeTarget(Point cursor)
+        {
+            Screen s = Screen.FromPoint(cursor);
+            Rectangle wa = s.WorkingArea;
+            double cx = (cursor.X - wa.Left) / (double)Math.Max(1, wa.Width), cy = (cursor.Y - wa.Top) / (double)Math.Max(1, wa.Height);
+            bool nearX = cx <= ScreenCornerTightShare || cx >= 1 - ScreenCornerTightShare;
+            bool nearY = cy <= ScreenCornerTightShare || cy >= 1 - ScreenCornerTightShare;
+            SnapCell? tight = nearX && nearY ? ScreenZone(wa, cursor) : null;
+            if (!tight.HasValue)
+            {
+                if (cx <= ScreenEdgeTightShare) tight = SnapCell.Left;
+                else if (cx >= 1 - ScreenEdgeTightShare) tight = SnapCell.Right;
+                else if (cy <= ScreenEdgeTightShare) tight = SnapCell.Top;
+                else if (cy >= 1 - ScreenEdgeTightShare) tight = SnapCell.Bottom;
+            }
+            if (!tight.HasValue) return false;
+            _dropCell = tight.Value;
+            _dropScreen = s;
+            SetDropTarget(DropKind.ScreenCell, null, DropSide.Left, ScreenCellRect(s, tight.Value));
+            return true;
+        }
 
         private static SnapCell? ScreenZone(Rectangle work, Point cursor)
         {
@@ -241,7 +279,8 @@ namespace FluentChromeTabs
             _dropArea = area;
 
             // Strip and window drops mark the strip too: that is where the tab will appear.
-            SetStripTarget(kind == DropKind.Strip || kind == DropKind.IntoWindow ? window as FluentChromeTabsForm : null);
+            // The window-wide zone already shows where the tab goes: the strip lights up only for a strip drop.
+            SetStripTarget(kind == DropKind.Strip ? window as FluentChromeTabsForm : null);
             if (kind == DropKind.IntoWindow) ShowDropPreview(VisibleBounds(window));
             else if (kind == DropKind.BesideWindow) ShowDropPreview(DockBesidePreview(window, side).Value);
             else if (kind == DropKind.ScreenCell) ShowDropPreview(area);
@@ -287,8 +326,23 @@ namespace FluentChromeTabs
                     else OpenWindowForTab(source, tab, window => { DockToScreen(window, screen, cell); TidyScreen(screen); });
                     return;
 
+                case DropKind.Free:
+                    // A free window where the tab was let go: the cursor on its strip, as it held the tab.
+                    Rectangle normal = PreDockBounds.TryGetValue(source, out Rectangle before) ? before
+                        : source.WindowState == FormWindowState.Normal ? source.Bounds : source.RestoreBounds;
+                    Rectangle free = KeepOnScreen(new Rectangle(cursor.X - normal.Width / 2, cursor.Y - 16, normal.Width, normal.Height), cursor);
+                    if (onlyTab)
+                    {
+                        Undock(source, restoreSize: false);
+                        if (source.WindowState != FormWindowState.Normal) source.WindowState = FormWindowState.Normal;
+                        source.Bounds = free;
+                        source.Activate();
+                    }
+                    else OpenWindowForTab(source, tab, window => { window.Bounds = free; });
+                    return;
+
                 default:
-                    // Let go outside every drop zone: the move is cancelled, like Escape.
+                    // Over another program's window, or one of ours that takes no drops: cancelled, like Escape.
                     return;
             }
         }

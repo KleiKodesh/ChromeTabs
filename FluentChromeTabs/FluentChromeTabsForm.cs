@@ -2017,6 +2017,14 @@ namespace FluentChromeTabs
             }
         }
 
+        // The strip's tab area (client coordinates): where its tabs sit and the empty space after them,
+        // not its buttons; down to half a strip below it (a window in hand is hard to aim).
+        private bool TabsRowContains(Point local)
+        {
+            if (local.Y < 0 || local.Y >= StripHeightPx * 3 / 2) return false;
+            return local.X >= GroupTabsLeftPx(0) && local.X < GroupTabsRightPx(0);
+        }
+
         private Rectangle TabRect(int index)
         {
             int group = GroupOf(_tabs[index]);
@@ -2228,6 +2236,17 @@ namespace FluentChromeTabs
         /// window it touches the screen's top edge, where Windows starts its own Snap.
         /// </summary>
         public static FluentChromeTabsForm FormWithStripAt(Point screenPoint, IntPtr ignore)
+            => FormWithStripAt(screenPoint, ignore, tabsOnly: false);
+
+        /// <summary>
+        /// Like <see cref="FormWithStripAt(Point, IntPtr)" />, but only over the strip's tab area,
+        /// with little slack below it and never its caption buttons. For a whole window
+        /// moved by its title bar, which passes other strips on its way and must not be caught.
+        /// </summary>
+        public static FluentChromeTabsForm FormWithTabsAt(Point screenPoint, IntPtr ignore)
+            => FormWithStripAt(screenPoint, ignore, tabsOnly: true);
+
+        private static FluentChromeTabsForm FormWithStripAt(Point screenPoint, IntPtr ignore, bool tabsOnly)
         {
             for (IntPtr h = NativeMethods.GetTopWindow(IntPtr.Zero); h != IntPtr.Zero; h = NativeMethods.GetWindow(h, NativeMethods.GW_HWNDNEXT))
             {
@@ -2243,6 +2262,7 @@ namespace FluentChromeTabs
                 {
                     if (form.IsDisposed || !form.IsHandleCreated || form.Handle != h || form.WindowState == FormWindowState.Minimized) continue;
                     Point local = form.PointToClient(screenPoint);
+                    if (tabsOnly) return form.TabsRowContains(local) ? form : null;
                     int reach = form.StripHeightPx * (1 + StripDropSlackFactor);
                     return local.Y >= 0 && local.Y < reach && local.X >= 0 && local.X < form.ClientSize.Width ? form : null;
                 }

@@ -101,7 +101,13 @@ namespace FluentChromeTabs
         public static void Forget(Form window)
         {
             Undock(window, restoreSize: false);
-            MinimizedPlaces.Remove(window);
+            // A minimized window closed: the place kept for it is gone, and a neighbour left alone is let go.
+            if (MinimizedPlaces.TryGetValue(window, out var waitingPlace))
+            {
+                MinimizedPlaces.Remove(window);
+                Screen placeScreen = waitingPlace.Key;
+                if (placeScreen != null) ReleaseIfLone(SnapGroups.Find(g => g.ScreenName == placeScreen.DeviceName));
+            }
             if (_dropWindow == window) EndTabDragVisuals();
             if (_mergingWindow == window) { _mergingWindow = null; SetStripTarget(null); }
             if (_stripTarget == window) SetStripTarget(null);

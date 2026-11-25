@@ -33,7 +33,11 @@ namespace FluentChromeTabs
             Point cursor = Cursor.Position;
             IntPtr self = window.IsHandleCreated ? window.Handle : IntPtr.Zero;
 
-            FluentChromeTabsForm strip = FluentChromeTabsForm.FormWithStripAt(cursor, self);
+            // The screen's edge band, ahead of Windows Snap: that half or quarter, as for a tab.
+            if (TryScreenEdgeTarget(cursor)) return;
+
+            // Only right over its tabs: a window passes other strips on its way.
+            FluentChromeTabsForm strip = FluentChromeTabsForm.FormWithTabsAt(cursor, self);
             if (strip != null && strip != window && IsDropTarget(strip))
             {
                 SetDropTarget(DropKind.Strip, strip, DropSide.Left, Rectangle.Empty);
@@ -63,7 +67,8 @@ namespace FluentChromeTabs
             SnapCell cell = _dropCell;
             Screen screen = _dropScreen;
             EndTabDragVisuals();
-            if (window.IsDisposed || window.WindowState != FormWindowState.Normal) return;
+            // Windows Snap may have maximized it at the top edge: our own screen place still wins.
+            if (window.IsDisposed || (window.WindowState != FormWindowState.Normal && kind != DropKind.ScreenCell)) return;
             Point cursor = Cursor.Position;
 
             switch (kind)

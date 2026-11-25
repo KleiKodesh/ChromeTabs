@@ -158,7 +158,9 @@ namespace FluentChromeTabs
             Rectangle before;
             if (!PreDockBounds.TryGetValue(window, out before))
                 before = window.WindowState == FormWindowState.Normal ? window.Bounds : window.RestoreBounds;
-            Undock(window, restoreSize: false);
+            // It may dock into the very group it leaves: that group is not let go on the way.
+            SnapGroup leaving = GroupOf(window, out _, out _);
+            Undock(window, restoreSize: false, comingBack: true);
             PreDockBounds[window] = before;
             if (window.WindowState != FormWindowState.Normal) window.WindowState = FormWindowState.Normal;
 
@@ -210,6 +212,8 @@ namespace FluentChromeTabs
                 else { LetGo(slot.B); slot.B = window; }
             }
             LayoutGroup(group);
+            // Docked somewhere else: the group it left may be down to one window.
+            if (leaving != group) ReleaseIfLone(leaving);
             window.Activate();
         }
 
@@ -343,7 +347,7 @@ namespace FluentChromeTabs
         /// Takes a window out of its group (closed, or dragged out): its neighbour takes its
         /// place. True when it was docked.
         /// </summary>
-        private static bool Undock(Form window, bool restoreSize)
+        private static bool Undock(Form window, bool restoreSize, bool comingBack = false)
         {
             SnapGroup group = GroupOf(window, out int slotIndex, out _);
             if (group == null) return false;
@@ -356,7 +360,26 @@ namespace FluentChromeTabs
             if (group.Slots[0].IsEmpty && group.Slots[1].IsEmpty) { SnapGroups.Remove(group); UpdateGroupTaskbarEntries(); return true; }
             FillEmptiedHalf(group);
             LayoutGroup(group);
+            // Not while the other is only minimized: it gets its place back on restore.
+            if (!comingBack) ReleaseIfLone(group);
             return true;
+        }
+
+        /// <summary>
+        /// A group a window just left, down to one window, lets it go: it fills the area and is a plain
+        /// window again, with drop zones on every side (docked to a missing neighbour it offered only
+        /// the side toward it). Not while a minimized window waits for its place on that screen.
+        /// </summary>
+        private static void ReleaseIfLone(SnapGroup group)
+        {
+            if (group == null || !SnapGroups.Contains(group)) return;
+            int count = 0;
+            foreach (SnapSlot slot in group.Slots) { if (slot.A != null) count++; if (slot.B != null) count++; }
+            if (count != 1) return;
+            foreach (var place in MinimizedPlaces.Values)
+                if (place.Key != null && place.Key.DeviceName == group.ScreenName) return;
+            ReleaseGroup(group);
+            UpdateGroupTaskbarEntries();
         }
 
         // A half left empty while the other half holds two quarters: those two become the two
@@ -513,7 +536,7 @@ namespace FluentChromeTabs
                 MinimizedPlaces[window] = new KeyValuePair<Screen, SnapCell>(ScreenByName(docked.ScreenName), CellAt(docked.Rows, s, pt));
                 Rectangle keep;
                 bool known = PreDockBounds.TryGetValue(window, out keep);
-                Undock(window, restoreSize: true);
+                Undock(window, restoreSize: true, comingBack: true);
                 if (known) PreDockBounds[window] = keep;
                 return;
             }
@@ -521,7 +544,15 @@ namespace FluentChromeTabs
             if (MinimizedPlaces.TryGetValue(window, out var place))
             {
                 MinimizedPlaces.Remove(window);
-                window.BeginInvoke(new Action(() => { if (!window.IsDisposed) { DockToScreen(window, place.Key, place.Value); TidyScreen(place.Key); } }));
+                window.BeginInvoke(new Action(() =>
+                {
+                    if (window.IsDisposed) return;
+                    // Back into its group - one kept to a place smaller than the screen stays so.
+                    _dockingIntoFixed = SnapGroups.Exists(g => g.ScreenName == place.Key.DeviceName && g.Fixed.HasValue);
+                    try { DockToScreen(window, place.Key, place.Value); }
+                    finally { _dockingIntoFixed = false; }
+                    TidyScreen(place.Key);
+                }));
                 return;
             }
             SnapGroup group = GroupOf(window, out int slot, out int part);
