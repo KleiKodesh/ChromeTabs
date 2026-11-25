@@ -473,8 +473,16 @@ namespace FluentChromeTabs
             SnapGroup group = GroupOf(window, out int slot, out int part);
             if (group == null) return;
             Rectangle cell = RectOf(group, slot, part < 0 ? 0 : part);
-            if (VisibleBounds(window) != cell) window.BeginInvoke(new Action(() => { if (!window.IsDisposed) LayoutGroup(group); }));
+            if (VisibleBounds(window) == cell) { LastRelayoutCell.Remove(window); return; }
+            // Already put back into this very cell once: a window that cannot take the cell's exact
+            // size (its minimum size, rounding) stays as close as it got, instead of a resize loop.
+            if (LastRelayoutCell.TryGetValue(window, out Rectangle tried) && tried == cell) return;
+            LastRelayoutCell[window] = cell;
+            window.BeginInvoke(new Action(() => { if (!window.IsDisposed) LayoutGroup(group); }));
         }
+
+        // The cell each window was last put back into after a resize (OnDockedWindowResized).
+        private static readonly Dictionary<Form, Rectangle> LastRelayoutCell = new Dictionary<Form, Rectangle>();
 
         // ── Shadows ─────────────────────────────────────────────────────────────
 

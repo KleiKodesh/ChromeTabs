@@ -59,8 +59,9 @@ namespace FluentChromeTabs
             if (window is FluentChromeTabsForm tabs) { Attach(tabs, host); return; }
             if (Windows.Contains(window)) return;
             Windows.Add(window);
+            // Hooked now and again whenever Windows recreates the handle (the hook ends with it).
             if (window.IsHandleCreated) new MessageHook(window);
-            else window.HandleCreated += (s, e) => new MessageHook(window);
+            window.HandleCreated += (s, e) => new MessageHook(window);
             window.Resize += (s, e) => OnDockedWindowResized(window);
             Join(window);
         }
@@ -72,6 +73,7 @@ namespace FluentChromeTabs
             {
                 Forget(window);
                 Windows.Remove(window);
+                LastRelayoutCell.Remove(window);
             };
         }
 

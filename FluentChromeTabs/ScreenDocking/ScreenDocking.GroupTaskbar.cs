@@ -115,7 +115,14 @@ namespace FluentChromeTabs
             string file = PictureFile(window);
             if (file != null)
             {
-                try { small.Save(file, System.Drawing.Imaging.ImageFormat.Png); small.Dispose(); return; }
+                try
+                {
+                    small.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+                    small.Dispose();
+                    // An older copy kept in memory (a save that failed before) must not shadow this one.
+                    if (KeptPictures.TryGetValue(window, out Bitmap stale)) { stale.Dispose(); KeptPictures.Remove(window); }
+                    return;
+                }
                 catch (Exception) { /* fall back to memory */ }
             }
             if (KeptPictures.TryGetValue(window, out Bitmap old)) old.Dispose();
@@ -144,11 +151,18 @@ namespace FluentChromeTabs
             if (KeptPictures.TryGetValue(window, out Bitmap kept)) { kept.Dispose(); KeptPictures.Remove(window); }
             string file = PictureFile(window);
             if (file != null) try { System.IO.File.Delete(file); } catch (Exception) { }
+            PictureIds.Remove(window);
         }
 
+        // Each window's picture file name: its own, kept for its lifetime (a handle can change).
+        private static readonly Dictionary<Form, string> PictureIds = new Dictionary<Form, string>();
+
         private static string PictureFile(Form window)
-            => string.IsNullOrEmpty(_pictureFolder) || !window.IsHandleCreated ? null
-               : System.IO.Path.Combine(_pictureFolder, window.Handle.ToInt64().ToString("x") + ".png");
+        {
+            if (string.IsNullOrEmpty(_pictureFolder)) return null;
+            if (!PictureIds.TryGetValue(window, out string id)) PictureIds[window] = id = Guid.NewGuid().ToString("N");
+            return System.IO.Path.Combine(_pictureFolder, id + ".png");
+        }
 
         // Where each window of the group will be once the group is brought back: the current
         // layout with the minimized windows put back in their cells (worked out on a copy).
@@ -279,6 +293,7 @@ namespace FluentChromeTabs
                 SnapGroup group = SnapGroups.Find(g => g.ScreenName == _screenName);
                 if (group == null) return;
                 Rectangle area = group.Area;
+                if (area.Width <= 0 || area.Height <= 0) return; // a display change in progress
                 double scale = live ? 1.0 : Math.Min(max.Width / (double)area.Width, max.Height / (double)area.Height);
                 int width = Math.Max(1, (int)(area.Width * scale)), height = Math.Max(1, (int)(area.Height * scale));
                 using (var picture = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
@@ -316,7 +331,15 @@ namespace FluentChromeTabs
             // A window's picture as drawn on screen, web content included (PW_RENDERFULLCONTENT).
             public static Bitmap CaptureWindow(Form window)
             {
+                try { return CaptureWindowCore(window); }
+                catch (Exception) { return null; } // mid DPI or display change: no picture this time
+            }
+
+            private static Bitmap CaptureWindowCore(Form window)
+            {
                 Rectangle outer = window.Bounds, seen = VisibleBounds(window);
+                // What the eye sees, within the window's rectangle (they disagree for a moment mid-change).
+                seen = Rectangle.Intersect(seen, outer);
                 if (seen.Width <= 0 || seen.Height <= 0) return null;
                 var full = new Bitmap(Math.Max(1, outer.Width), Math.Max(1, outer.Height), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                 using (Graphics g = Graphics.FromImage(full))
