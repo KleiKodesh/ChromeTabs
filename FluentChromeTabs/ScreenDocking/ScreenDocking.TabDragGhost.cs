@@ -25,6 +25,13 @@ namespace FluentChromeTabs
             private readonly Color _accent;
             private Image _picture;
 
+            protected override void Dispose(bool disposing)
+            {
+                // The page's picture (several MB) goes with the floating tab, at every drag's end.
+                if (disposing) { _picture?.Dispose(); _picture = null; }
+                base.Dispose(disposing);
+            }
+
             public TabDragGhost(string title, Image icon, int dpi)
             {
                 _title = title ?? "";
@@ -77,6 +84,7 @@ namespace FluentChromeTabs
             /// <summary>The page's picture, shown small under the tab.</summary>
             public void SetPicture(Image picture)
             {
+                _picture?.Dispose();
                 _picture = picture;
                 int width = Px(260);
                 int previewWidth = width - Px(12);

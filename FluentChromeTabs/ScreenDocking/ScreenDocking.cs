@@ -148,7 +148,9 @@ namespace FluentChromeTabs
         // takes a docked window out, and the window order keeps shadows hidden.
         internal static void BeforeWindowMessage(Form window, ref Message m)
         {
-            const int WM_SIZING = 0x0214, WM_MOVING = 0x0216, WM_WINDOWPOSCHANGING = 0x0046;
+            const int WM_SIZING = 0x0214, WM_MOVING = 0x0216, WM_WINDOWPOSCHANGING = 0x0046, WM_SYSCOMMAND = 0x0112, SC_MINIMIZE = 0xF020;
+            // About to be minimized: its picture for the group's taskbar preview (ScreenDocking.GroupTaskbar.cs).
+            if (m.Msg == WM_SYSCOMMAND && (m.WParam.ToInt32() & 0xFFF0) == SC_MINIMIZE) RememberPicture(window);
             if (m.LParam == IntPtr.Zero) return;
             if (m.Msg == WM_WINDOWPOSCHANGING)
             {

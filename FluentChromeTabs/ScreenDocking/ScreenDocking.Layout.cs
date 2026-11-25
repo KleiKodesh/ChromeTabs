@@ -286,6 +286,7 @@ namespace FluentChromeTabs
                 LetGo(b);
             }
             SnapGroups.Remove(group);
+            UpdateGroupTaskbarEntries();
         }
 
         /// <summary>
@@ -302,7 +303,7 @@ namespace FluentChromeTabs
             slot.Split = 0.5;
             SetSquareCorners(window, false);
             if (!restoreSize) PreDockBounds.Remove(window);
-            if (group.Slots[0].IsEmpty && group.Slots[1].IsEmpty) { SnapGroups.Remove(group); return true; }
+            if (group.Slots[0].IsEmpty && group.Slots[1].IsEmpty) { SnapGroups.Remove(group); UpdateGroupTaskbarEntries(); return true; }
             FillEmptiedHalf(group);
             LayoutGroup(group);
             return true;
@@ -332,6 +333,7 @@ namespace FluentChromeTabs
                 Place(slot.B, RectOf(group, i, 1));
             }
             KeepGroupShadowsHidden(group);
+            UpdateGroupTaskbarEntries(); // the group's own taskbar entry (ScreenDocking.GroupTaskbar.cs)
         }
 
         private static void Place(Form window, Rectangle cell)
