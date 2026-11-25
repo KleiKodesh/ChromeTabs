@@ -98,8 +98,13 @@ namespace FluentChromeTabs
         }
 
         private static void UpdateTabDropTarget(FluentChromeTabsForm source, Point cursor)
+            => UpdateDropTarget(source, cursor, _ghost != null && _ghost.IsHandleCreated ? _ghost.Handle : IntPtr.Zero);
+
+        // Where a drop at the cursor goes - for a dragged tab, `ignore` is its floating card; for a
+        // window moved by its title bar, the window itself (it is under the cursor).
+        private static void UpdateDropTarget(Form source, Point cursor, IntPtr ignore)
         {
-            IntPtr ghost = _ghost != null && _ghost.IsHandleCreated ? _ghost.Handle : IntPtr.Zero;
+            IntPtr ghost = ignore;
 
             // The very corner of a screen is that quarter, and a thin band along its edge that half,
             // even over a docked window's strip or edge there.
@@ -283,23 +288,7 @@ namespace FluentChromeTabs
                     return;
 
                 default:
-                    // A window where the tab was let go, the size of the one it came from; the
-                    // cursor lands on its strip, near where tabs start (the right side: RTL).
-                    Size size = source.WindowState == FormWindowState.Normal ? source.Size : source.RestoreBounds.Size;
-                    int inset = (int)(140 * source.DeviceDpi / 96f);
-                    var bounds = KeepOnScreen(
-                        new Rectangle(cursor.X - size.Width + inset, cursor.Y - (int)(16 * source.DeviceDpi / 96f), size.Width, size.Height),
-                        cursor);
-                    Action<Form> place = window =>
-                    {
-                        if (window.WindowState != FormWindowState.Normal) window.WindowState = FormWindowState.Normal;
-                        window.Bounds = bounds;
-                        window.Activate();
-                        // Never over another of our windows: it takes the place nearest the cursor.
-                        TileNear(window, cursor);
-                    };
-                    if (onlyTab) place(source);
-                    else OpenWindowForTab(source, tab, place);
+                    // Let go outside every drop zone: the move is cancelled, like Escape.
                     return;
             }
         }

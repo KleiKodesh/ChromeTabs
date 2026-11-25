@@ -53,7 +53,12 @@ namespace FluentChromeTabs
             public bool Rows;
             public double Split = 0.5;
             public readonly SnapSlot[] Slots = { new SnapSlot(), new SnapSlot() };
-            public Rectangle Area => ScreenByName(ScreenName).WorkingArea;
+            /// <summary>
+            /// The area the group fills when not the whole screen: the place of a window that was
+            /// split by a drop at its edge (it keeps to that place).
+            /// </summary>
+            public Rectangle? Fixed;
+            public Rectangle Area => Fixed ?? ScreenByName(ScreenName).WorkingArea;
         }
 
         private static readonly List<SnapGroup> SnapGroups = new List<SnapGroup>();
@@ -124,7 +129,7 @@ namespace FluentChromeTabs
             SnapGroup group = SnapGroups.Find(g => g.ScreenName == screen.DeviceName);
             bool rows = IsHalf(cell) ? IsRowsHalf(cell) : group != null && group.Rows;
             Locate(cell, rows, out int slot, out int part);
-            bool same = group != null && group.Rows == rows;
+            bool same = group != null && !group.Fixed.HasValue && group.Rows == rows;
             return CellRect(screen.WorkingArea, rows, same ? group.Split : 0.5, same ? group.Slots[slot].Split : 0.5, slot, part);
         }
 
@@ -158,7 +163,14 @@ namespace FluentChromeTabs
             if (window.WindowState != FormWindowState.Normal) window.WindowState = FormWindowState.Normal;
 
             SnapGroup group = SnapGroups.Find(g => g.ScreenName == screen.DeviceName);
-            // A half of the other orientation starts the screen over: the old group is let go.
+            // A half of the other orientation starts the screen over: the old group is let go. So does
+            // a group kept to one window's place when a drop at the screen's edge wants the screen -
+            // unless this window is joining that very group (DockBeside made it for them).
+            if (group != null && group.Fixed.HasValue && !_dockingIntoFixed)
+            {
+                ReleaseGroup(group);
+                group = null;
+            }
             if (group != null && IsHalf(cell) && group.Rows != IsRowsHalf(cell))
             {
                 ReleaseGroup(group);
@@ -207,15 +219,24 @@ namespace FluentChromeTabs
         /// halves with it. False when that place cannot be had (a quarter is not split again).
         /// </summary>
         private static bool CanDockBeside(Form target, DropSide side, out Screen screen, out SnapCell cell, out SnapCell targetCell)
+            => CanDockBeside(target, side, out screen, out cell, out targetCell, out _);
+
+        // `area`: what the two share when the target is not docked - the target's own place (the
+        // whole screen when it is maximized or its place cannot be halved); null when docked.
+        private static bool CanDockBeside(Form target, DropSide side, out Screen screen, out SnapCell cell, out SnapCell targetCell, out Rectangle? area)
         {
             screen = Screen.FromHandle(target.Handle);
             SnapGroup group = GroupOf(target, out int slot, out int part);
             targetCell = cell = SnapCell.Left;
+            area = null;
             if (group == null)
             {
                 bool rows = side == DropSide.Top || side == DropSide.Bottom;
                 cell = rows ? (side == DropSide.Top ? SnapCell.Top : SnapCell.Bottom) : (side == DropSide.Left ? SnapCell.Left : SnapCell.Right);
                 targetCell = rows ? (side == DropSide.Top ? SnapCell.Bottom : SnapCell.Top) : (side == DropSide.Left ? SnapCell.Right : SnapCell.Left);
+                Rectangle own = target.WindowState == FormWindowState.Maximized ? screen.WorkingArea : Rectangle.Intersect(VisibleBounds(target), screen.WorkingArea);
+                if (HalfFits(own, rows, target)) { area = own; return true; }
+                area = screen.WorkingArea;
                 return HalfFits(screen.WorkingArea, rows, target);
             }
             if (part >= 0) return false;
@@ -245,22 +266,51 @@ namespace FluentChromeTabs
             => (window as FluentChromeTabsForm)?.MinimumWindowWidthPx
                ?? Math.Max(window.MinimumSize.Width, SystemInformation.MinimumWindowSize.Width);
 
+        // Set while DockBeside docks two windows into the group it made in the target's place.
+        private static bool _dockingIntoFixed;
+
         private static void DockBeside(Form window, Form target, DropSide side)
         {
             if (window.IsDisposed || target.IsDisposed) return;
-            if (!CanDockBeside(target, side, out Screen screen, out SnapCell cell, out SnapCell targetCell)) return;
-            if (!IsDocked(target)) DockToScreen(target, screen, targetCell);
-            DockToScreen(window, screen, cell);
+            if (!CanDockBeside(target, side, out Screen screen, out SnapCell cell, out SnapCell targetCell, out Rectangle? area)) return;
+            if (!IsDocked(target))
+            {
+                // A new group in the target's own place (the screen's group, if any, lets its windows go).
+                SnapGroup old = SnapGroups.Find(g => g.ScreenName == screen.DeviceName);
+                if (old != null) ReleaseGroup(old);
+                bool rows = side == DropSide.Top || side == DropSide.Bottom;
+                SnapGroups.Add(new SnapGroup
+                {
+                    ScreenName = screen.DeviceName,
+                    Rows = rows,
+                    Fixed = area.HasValue && area.Value != screen.WorkingArea ? area : null,
+                });
+                _dockingIntoFixed = true;
+                try { DockToScreen(target, screen, targetCell); }
+                finally { _dockingIntoFixed = false; }
+            }
+            _dockingIntoFixed = SnapGroups.Exists(g => g.ScreenName == screen.DeviceName && g.Fixed.HasValue);
+            try { DockToScreen(window, screen, cell); }
+            finally { _dockingIntoFixed = false; }
         }
 
         /// <summary>Where a window dropped at that side of the target would land (the drop preview).</summary>
         private static Rectangle? DockBesidePreview(Form target, DropSide side)
         {
-            if (!CanDockBeside(target, side, out Screen screen, out SnapCell cell, out _)) return null;
+            if (!CanDockBeside(target, side, out Screen screen, out SnapCell cell, out _, out Rectangle? area)) return null;
             SnapGroup group = GroupOf(target, out int slot, out _);
-            if (group == null) return ScreenCellRect(screen, cell);
+            if (group == null)
+            {
+                bool rows = side == DropSide.Top || side == DropSide.Bottom;
+                Locate(cell, rows, out int s0, out int p0);
+                return CellRect(area ?? screen.WorkingArea, rows, 0.5, 0.5, s0, p0);
+            }
             Locate(cell, group.Rows, out int s, out int p);
-            return CellRect(group.Area, group.Rows, group.Split, s == slot && p >= 0 ? 0.5 : group.Slots[s].Split, s, p);
+            // As RectOf lays it out after the drop: a half whose other half is empty fills the area
+            // (the target window there fills it now; split, it still does).
+            int otherSlot = s == 0 ? 1 : 0;
+            double split = group.Slots[otherSlot].IsEmpty ? (s == 0 ? 1.0 : 0.0) : group.Split;
+            return CellRect(group.Area, group.Rows, split, s == slot && p >= 0 ? 0.5 : group.Slots[s].Split, s, p);
         }
 
         // A window let go of its place by another taking it: it stays where it is, undocked.
@@ -438,6 +488,10 @@ namespace FluentChromeTabs
             bool known = PreDockBounds.TryGetValue(window, out before);
             Undock(window, restoreSize: true);
             PreDockBounds.Remove(window);
+            // Out of its group, it is no longer kept beneath its lower neighbour (its shadow): the
+            // window being dragged is in front of everything.
+            const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
+            if (window.IsHandleCreated) SetWindowPos(window.Handle, IntPtr.Zero, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
             if (!known) return;
             Point cursor = Cursor.Position;
             int width = proposed.Right - proposed.Left;

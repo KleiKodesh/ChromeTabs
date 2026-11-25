@@ -66,6 +66,9 @@ namespace FluentChromeTabs
             if (shown.Count < 2) return;
             foreach (Form loose in shown.FindAll(w => !IsDocked(w)))
             {
+                // Only a window that covers another (or is covered) has to move.
+                Rectangle mine = VisibleBounds(loose);
+                if (!shown.Exists(w => w != loose && !w.IsDisposed && VisibleBounds(w).IntersectsWith(mine))) continue;
                 SnapGroup group = SnapGroups.Find(g => g.ScreenName == screen.DeviceName);
                 if (group == null)
                 {
