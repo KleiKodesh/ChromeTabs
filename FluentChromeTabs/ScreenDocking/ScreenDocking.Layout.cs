@@ -375,8 +375,9 @@ namespace FluentChromeTabs
             if (!group.Rows)
             {
                 // The main line is vertical: slot 0's right edge, slot 1's left edge.
-                if (slot == 0 && r) group.Split = Clamp((right - area.Left) / (double)area.Width, area.Width, MinDockedWidth);
-                if (slot == 1 && l) group.Split = Clamp((left - area.Left) / (double)area.Width, area.Width, MinDockedWidth);
+                int minLeft = MinWidthOf(group.Slots[0]), minRight = MinWidthOf(group.Slots[1]);
+                if (slot == 0 && r) group.Split = Clamp((right - area.Left) / (double)area.Width, area.Width, minLeft, minRight);
+                if (slot == 1 && l) group.Split = Clamp((left - area.Left) / (double)area.Width, area.Width, minLeft, minRight);
                 // The slot's line is horizontal: part A's bottom, part B's top.
                 if (part == 0 && b) s.Split = Clamp((bottom - area.Top) / (double)area.Height, area.Height, MinDockedHeight);
                 if (part == 1 && t) s.Split = Clamp((top - area.Top) / (double)area.Height, area.Height, MinDockedHeight);
@@ -385,8 +386,9 @@ namespace FluentChromeTabs
             {
                 if (slot == 0 && b) group.Split = Clamp((bottom - area.Top) / (double)area.Height, area.Height, MinDockedHeight);
                 if (slot == 1 && t) group.Split = Clamp((top - area.Top) / (double)area.Height, area.Height, MinDockedHeight);
-                if (part == 0 && r) s.Split = Clamp((right - area.Left) / (double)area.Width, area.Width, MinDockedWidth);
-                if (part == 1 && l) s.Split = Clamp((left - area.Left) / (double)area.Width, area.Width, MinDockedWidth);
+                int minA = MinWidthOf(s.A), minB = MinWidthOf(s.B);
+                if (part == 0 && r) s.Split = Clamp((right - area.Left) / (double)area.Width, area.Width, minA, minB);
+                if (part == 1 && l) s.Split = Clamp((left - area.Left) / (double)area.Width, area.Width, minA, minB);
             }
 
             // Everyone takes their place on the moved lines; this window's comes back as the proposal.
@@ -405,11 +407,23 @@ namespace FluentChromeTabs
         }
 
         // A line's place as a share of the area, kept so both sides stay at least `min` long.
-        private static double Clamp(double share, int length, int min)
+        private static double Clamp(double share, int length, int min) => Clamp(share, length, min, min);
+
+        // The same with each side's own minimum (a window cannot be made narrower than its strip
+        // needs; a line pushed past that would leave the windows overlapping).
+        private static double Clamp(double share, int length, int minBefore, int minAfter)
         {
-            double m = Math.Min(0.5, min / (double)Math.Max(1, length));
-            return Math.Max(m, Math.Min(1 - m, share));
+            double total = Math.Max(1, length);
+            double low = minBefore / total, high = 1 - minAfter / total;
+            if (low > high) return (low + high) / 2; // both cannot fit: split the shortfall
+            return Math.Max(low, Math.Min(high, share));
         }
+
+        // The narrowest the windows of a slot can be made (and never below the docked minimum).
+        private static int MinWidthOf(SnapSlot slot)
+            => Math.Max(Math.Max(MinDockedWidth, MinWidthOf(slot.A)), MinWidthOf(slot.B));
+
+        private static int MinWidthOf(Form window) => window == null ? MinDockedWidth : Math.Max(MinDockedWidth, MinimumWidthOf(window));
 
         /// <summary>
         /// A docked window starts moving by its title bar (WM_MOVING): it leaves its group and
